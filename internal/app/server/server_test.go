@@ -10,6 +10,7 @@ import (
 
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
+	"github.com/go-chi/chi/v5"
 )
 
 func TestServer_createRedirect(t *testing.T) {
@@ -120,9 +121,9 @@ func TestServer_redirect(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewServer(serviceTest)
 
-			mux := http.NewServeMux()
-			mux.HandleFunc("/{keyID}", s.redirect)
-			ts := httptest.NewServer(mux)
+			r := chi.NewRouter()
+			r.Get("/{keyID}", s.redirect)
+			ts := httptest.NewServer(r)
 			defer ts.Close()
 			url := fmt.Sprintf("%s%s", ts.URL, tt.url)
 			fmt.Println("Url - ", url)

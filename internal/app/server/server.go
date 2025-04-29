@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/TPizik/url-shortener/internal/app/services"
+	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
@@ -20,13 +21,13 @@ const ServerAddr string = "127.0.0.1:8080"
 func NewServer(service services.Service) Server {
 	newServer := Server{service: service, srv: nil}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", newServer.createRedirect)
-	mux.HandleFunc("/{keyID}", newServer.redirect)
+	r := chi.NewRouter()
+	r.Post("/", newServer.createRedirect)
+	r.Get("/{keyID}", newServer.redirect)
 
 	srv := http.Server{
 		Addr:    ServerAddr,
-		Handler: mux,
+		Handler: r,
 	}
 	newServer.srv = &srv
 
