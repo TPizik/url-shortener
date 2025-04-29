@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/TPizik/url-shortener/internal/app/config"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/go-chi/chi/v5"
 )
@@ -14,19 +15,18 @@ import (
 type Server struct {
 	service services.Service
 	srv     *http.Server
+	config  config.Config
 }
 
-const ServerAddr string = "127.0.0.1:8080"
-
-func NewServer(service services.Service) Server {
-	newServer := Server{service: service, srv: nil}
+func NewServer(service services.Service, config config.Config) Server {
+	newServer := Server{service: service, srv: nil, config: config}
 
 	r := chi.NewRouter()
 	r.Post("/", newServer.createRedirect)
 	r.Get("/{keyID}", newServer.redirect)
 
 	srv := http.Server{
-		Addr:    ServerAddr,
+		Addr:    config.RunAddr,
 		Handler: r,
 	}
 	newServer.srv = &srv
@@ -72,7 +72,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("Add url", url)
 	key := s.service.CreateRedirect(url)
-	resultURL := fmt.Sprintf("http://%s/%s", ServerAddr, key)
+	resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(resultURL))
 }

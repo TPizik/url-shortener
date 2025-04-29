@@ -8,12 +8,17 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/TPizik/url-shortener/internal/app/config"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
 	"github.com/go-chi/chi/v5"
 )
 
 func TestServer_createRedirect(t *testing.T) {
+	var configTest = config.Config{
+		RunAddr:   "127.0.0.1:8080",
+		ShortAddr: "http://127.0.0.1:8080",
+	}
 	var storageTest = storage.New()
 	var serviceTest = services.NewService(storageTest)
 	tests := []struct {
@@ -67,7 +72,7 @@ func TestServer_createRedirect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(serviceTest)
+			s := NewServer(serviceTest, configTest)
 			data := url.Values{}
 			data.Set(tt.urlKey, tt.urlVal)
 
@@ -87,6 +92,10 @@ func TestServer_createRedirect(t *testing.T) {
 }
 
 func TestServer_redirect(t *testing.T) {
+	var configTest = config.Config{
+		RunAddr:   "127.0.0.1:8080",
+		ShortAddr: "http://127.0.0.1:8080",
+	}
 	var storageTest = storage.New()
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
@@ -119,7 +128,7 @@ func TestServer_redirect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(serviceTest)
+			s := NewServer(serviceTest, configTest)
 
 			r := chi.NewRouter()
 			r.Get("/{keyID}", s.redirect)

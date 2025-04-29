@@ -7,15 +7,17 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/TPizik/url-shortener/internal/app/config"
 	"github.com/TPizik/url-shortener/internal/app/server"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
 )
 
 func main() {
+	configVar := config.ParseConfig()
 	storageVar := storage.New()
 	serviceVar := services.NewService(storageVar)
-	serverVar := server.NewServer(serviceVar)
+	serverVar := server.NewServer(serviceVar, configVar)
 	go serverVar.ListenAndServe()
 
 	stop := make(chan os.Signal, 1)
