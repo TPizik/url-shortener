@@ -99,7 +99,7 @@ func TestServer_redirect(t *testing.T) {
 	var storageTest = storage.New()
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
-	var validKey = serviceTest.CreateRedirect(location)
+	var validKey, _ = serviceTest.CreateRedirect(location)
 	client := http.Client{}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse

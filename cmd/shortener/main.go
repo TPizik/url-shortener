@@ -25,9 +25,9 @@ func main() {
 
 	<-stop
 
-	ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := serverVar.Shutdown(ctx2); err != nil {
+	if err := serverVar.Shutdown(ctx); err != nil {
 		panic("unexpected err on graceful shutdown")
 	}
 	fmt.Println("main: done. exiting")

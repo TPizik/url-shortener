@@ -71,7 +71,12 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println("Add url", url)
-	key := s.service.CreateRedirect(url)
+	key, err := s.service.CreateRedirect(url)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Println(err, key)
+		return
+	}
 	resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(resultURL))
@@ -83,7 +88,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	url, err := s.service.GetURLByKey(key)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Println("invalid key", key)
+		fmt.Println(err, key)
 		return
 	}
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)

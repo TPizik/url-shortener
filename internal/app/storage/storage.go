@@ -1,33 +1,48 @@
 package storage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
-	"strconv"
 	"sync"
 )
 
+type StorageErrors struct {
+	errKey   error
+	errWrite error
+}
+
 type Storage struct {
 	sync.RWMutex
-	links   map[string]string
-	counter int
+	links map[string]string
+	err   *StorageErrors
 }
 
 func New() *Storage {
 	return &Storage{
-		counter: 1,
-		links:   map[string]string{},
+		links: map[string]string{},
+		err: &StorageErrors{
+			errKey:   errors.New("key not exist"),
+			errWrite: errors.New("error witch write key"),
+		},
 	}
 }
 
-func (c *Storage) Add(url string) string {
+func (c *Storage) Add(url string) (string, error) {
 	c.Lock()
 	defer c.Unlock()
 
-	c.counter++
-	key := strconv.Itoa(c.counter)
+	h := sha256.New()
+	_, err := h.Write([]byte(url))
+	if err != nil {
+		return "", c.err.errWrite
+	}
+
+	sha256Sum := h.Sum(nil)
+	key := hex.EncodeToString(sha256Sum[:5])
 	c.links[key] = url
 
-	return key
+	return key, nil
 }
 
 func (c *Storage) Get(key string) (string, error) {
@@ -36,7 +51,7 @@ func (c *Storage) Get(key string) (string, error) {
 
 	url, ok := c.links[key]
 	if !ok {
-		return "", errors.New("key not exist")
+		return "", c.err.errKey
 	}
 
 	return url, nil

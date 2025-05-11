@@ -2,7 +2,7 @@ package services
 
 type IStorage interface {
 	Get(key string) (string, error)
-	Add(url string) string
+	Add(url string) (string, error)
 }
 
 type Service struct {
@@ -15,7 +15,7 @@ func NewService(storage IStorage) Service {
 	}
 }
 
-func (s *Service) CreateRedirect(key string) string {
+func (s *Service) CreateRedirect(key string) (string, error) {
 	return s.storage.Add(key)
 }
 
