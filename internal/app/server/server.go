@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
-	"github.com/TPizik/url-shortener/internal/app/middleware"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -19,10 +18,9 @@ type Server struct {
 	service services.Service
 	srv     *http.Server
 	config  config.Config
-	sugar   *zap.SugaredLogger
 }
 
-var sugar zap.SugaredLogger
+var Sugar zap.SugaredLogger
 
 func NewServer(service services.Service, config config.Config) Server {
 	logger, err := zap.NewDevelopment()
@@ -31,17 +29,20 @@ func NewServer(service services.Service, config config.Config) Server {
 	}
 	defer logger.Sync()
 
-	sugar = *logger.Sugar()
-	newServer := Server{service: service, srv: nil, config: config, sugar: &sugar}
+	Sugar = *logger.Sugar()
+	newServer := Server{service: service, srv: nil, config: config}
 
 	r := chi.NewRouter()
+	r.Use(withLogging)
+	r.Use(ungzipHandle)
+	r.Use(gzipHandle)
 	r.Post("/", newServer.createRedirect)
 	r.Post("/api/shorten", newServer.createRedirectJSON)
 	r.Get("/{keyID}", newServer.redirect)
 
 	srv := http.Server{
 		Addr:    config.RunAddr,
-		Handler: middleware.WithLogging(r, &sugar),
+		Handler: r,
 	}
 	newServer.srv = &srv
 
@@ -71,6 +72,13 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		url = strings.TrimSuffix(string(urlBytes), "\n")
+	case "application/x-gzip":
+		urlBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			s.error(w, http.StatusInternalServerError, "invalid body")
+			return
+		}
+		url = strings.TrimSuffix(string(urlBytes), "\n")
 	default:
 		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
 		return
@@ -86,7 +94,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return
 	}
-	s.sugar.Infoln("Add url", url)
+	Sugar.Infoln("Add url", url)
 	resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(resultURL))
@@ -94,7 +102,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("keyID")
-	s.sugar.Infoln("Call redirect for", key)
+	Sugar.Infoln("Call redirect for", key)
 	url, err := s.service.GetURLByKey(key)
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
@@ -123,7 +131,7 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
 		return
 	}
-	s.sugar.Infoln("Create redirect for", redirect.URL)
+	Sugar.Infoln("Create redirect for", redirect.URL)
 	key, err := s.service.CreateRedirect(redirect.URL)
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
@@ -142,6 +150,6 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 func (s *Server) error(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	w.Header().Set("content-type", "plain/text")
-	s.sugar.Infoln(msg)
+	Sugar.Infoln(msg)
 	w.Write([]byte(msg))
 }
