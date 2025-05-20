@@ -17,10 +17,12 @@ import (
 
 func TestServer_createRedirect(t *testing.T) {
 	var configTest = config.Config{
-		RunAddr:   "127.0.0.1:8080",
-		ShortAddr: "http://127.0.0.1:8080",
+		RunAddr:         "127.0.0.1:8080",
+		ShortAddr:       "http://127.0.0.1:8080",
+		FileStoragePath: "storage.txt",
 	}
-	var storageTest = storage.New()
+	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
+	storageTest, _ := storage.New(persistentStorage)
 	var serviceTest = services.NewService(storageTest)
 	tests := []struct {
 		name        string
@@ -94,10 +96,12 @@ func TestServer_createRedirect(t *testing.T) {
 
 func TestServer_redirect(t *testing.T) {
 	var configTest = config.Config{
-		RunAddr:   "127.0.0.1:8080",
-		ShortAddr: "http://127.0.0.1:8080",
+		RunAddr:         "127.0.0.1:8080",
+		ShortAddr:       "http://127.0.0.1:8080",
+		FileStoragePath: "storage.txt",
 	}
-	var storageTest = storage.New()
+	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
+	storageTest, _ := storage.New(persistentStorage)
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
 	var validKey, _ = serviceTest.CreateRedirect(location)
@@ -158,10 +162,12 @@ func TestServer_redirect(t *testing.T) {
 
 func TestServer_createRedirectJSON(t *testing.T) {
 	var configTest = config.Config{
-		RunAddr:   "127.0.0.1:8080",
-		ShortAddr: "http://127.0.0.1:8080",
+		RunAddr:         "127.0.0.1:8080",
+		ShortAddr:       "http://127.0.0.1:8080",
+		FileStoragePath: "storage.txt",
 	}
-	var storageTest = storage.New()
+	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
+	storageTest, _ := storage.New(persistentStorage)
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
 	var validKey, _ = serviceTest.CreateRedirect(location)

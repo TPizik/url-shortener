@@ -8,15 +8,26 @@ import (
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
 )
 
-type Storage struct {
-	sync.RWMutex
-	links map[string]string
+type PersistentStorageExpected interface {
+	Load() (map[string]string, error)
+	Add(key string, val string) error
 }
 
-func New() *Storage {
-	return &Storage{
-		links: map[string]string{},
+type Storage struct {
+	sync.RWMutex
+	links   map[string]string
+	storage PersistentStorageExpected
+}
+
+func New(persistent PersistentStorageExpected) (*Storage, error) {
+	data, err := persistent.Load()
+	if err != nil {
+		return nil, err
 	}
+	return &Storage{
+		links:   data,
+		storage: persistent,
+	}, nil
 }
 
 func (c *Storage) Add(url string) (string, error) {
@@ -32,6 +43,7 @@ func (c *Storage) Add(url string) (string, error) {
 	sha256Sum := h.Sum(nil)
 	key := hex.EncodeToString(sha256Sum[:5])
 	c.links[key] = url
+	c.storage.Add(key, url)
 
 	return key, nil
 }
