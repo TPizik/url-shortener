@@ -3,28 +3,19 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"sync"
-)
 
-type StorageErrors struct {
-	errKey   error
-	errWrite error
-}
+	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
+)
 
 type Storage struct {
 	sync.RWMutex
 	links map[string]string
-	err   *StorageErrors
 }
 
 func New() *Storage {
 	return &Storage{
 		links: map[string]string{},
-		err: &StorageErrors{
-			errKey:   errors.New("key not exist"),
-			errWrite: errors.New("error witch write key"),
-		},
 	}
 }
 
@@ -35,7 +26,7 @@ func (c *Storage) Add(url string) (string, error) {
 	h := sha256.New()
 	_, err := h.Write([]byte(url))
 	if err != nil {
-		return "", c.err.errWrite
+		return "", appErrors.ErrWrite
 	}
 
 	sha256Sum := h.Sum(nil)
@@ -51,7 +42,7 @@ func (c *Storage) Get(key string) (string, error) {
 
 	url, ok := c.links[key]
 	if !ok {
-		return "", c.err.errKey
+		return "", appErrors.ErrKey
 	}
 
 	return url, nil

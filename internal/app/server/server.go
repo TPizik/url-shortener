@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
+	"github.com/TPizik/url-shortener/internal/app/middleware"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 type Server struct {
@@ -18,16 +20,25 @@ type Server struct {
 	config  config.Config
 }
 
+var sugar zap.SugaredLogger
+
 func NewServer(service services.Service, config config.Config) Server {
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		panic(err)
+	}
+	defer logger.Sync()
+
+	sugar = *logger.Sugar()
 	newServer := Server{service: service, srv: nil, config: config}
 
 	r := chi.NewRouter()
-	r.Post("/", newServer.createRedirect)
+	r.Post("/", (newServer.createRedirect))
 	r.Get("/{keyID}", newServer.redirect)
 
 	srv := http.Server{
 		Addr:    config.RunAddr,
-		Handler: r,
+		Handler: middleware.WithLogging(r, &sugar),
 	}
 	newServer.srv = &srv
 
