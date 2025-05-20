@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ type Server struct {
 	service services.Service
 	srv     *http.Server
 	config  config.Config
+	sugar   *zap.SugaredLogger
 }
 
 var sugar zap.SugaredLogger
@@ -30,10 +32,11 @@ func NewServer(service services.Service, config config.Config) Server {
 	defer logger.Sync()
 
 	sugar = *logger.Sugar()
-	newServer := Server{service: service, srv: nil, config: config}
+	newServer := Server{service: service, srv: nil, config: config, sugar: &sugar}
 
 	r := chi.NewRouter()
-	r.Post("/", (newServer.createRedirect))
+	r.Post("/", newServer.createRedirect)
+	r.Post("/api/shorten", newServer.createRedirectJSON)
 	r.Get("/{keyID}", newServer.redirect)
 
 	srv := http.Server{
@@ -64,30 +67,26 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 	case "text/plain; charset=utf-8":
 		urlBytes, err := io.ReadAll(r.Body)
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Println("invalid parse body")
+			s.error(w, http.StatusInternalServerError, "invalid parse body")
 			return
 		}
 		url = strings.TrimSuffix(string(urlBytes), "\n")
 	default:
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		fmt.Println("invalid ContentType")
+		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
 		return
 	}
 
 	if url == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Println("invalid url")
+		s.error(w, http.StatusBadRequest, "invalid url")
 		return
 	}
 
-	fmt.Println("Add url", url)
 	key, err := s.service.CreateRedirect(url)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Println(err, key)
+		s.error(w, http.StatusBadRequest, "invalid key")
 		return
 	}
+	s.sugar.Infoln("Add url", url)
 	resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(resultURL))
@@ -95,12 +94,54 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("keyID")
-	fmt.Println("Call redirect for", key)
+	s.sugar.Infoln("Call redirect for", key)
 	url, err := s.service.GetURLByKey(key)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Println(err, key)
+		s.error(w, http.StatusBadRequest, "invalid key")
 		return
 	}
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
+	headerContentType := r.Header.Get("Content-Type")
+
+	var redirect Redirect
+	switch headerContentType {
+	case "application/json":
+		dataBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			s.error(w, http.StatusInternalServerError, "invalid parse body")
+			return
+		}
+		err = json.Unmarshal(dataBytes, &redirect)
+		if err != nil || redirect.URL == "" {
+			s.error(w, http.StatusBadRequest, "invalid parse body")
+			return
+		}
+	default:
+		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
+		return
+	}
+	s.sugar.Infoln("Create redirect for", redirect.URL)
+	key, err := s.service.CreateRedirect(redirect.URL)
+	if err != nil {
+		s.error(w, http.StatusBadRequest, "invalid key")
+		return
+	}
+	result := ResultString{
+		Result: fmt.Sprintf("%s/%s", s.config.ShortAddr, key),
+	}
+
+	response, _ := json.Marshal(result)
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(response))
+}
+
+func (s *Server) error(w http.ResponseWriter, code int, msg string) {
+	w.WriteHeader(code)
+	w.Header().Set("content-type", "plain/text")
+	s.sugar.Infoln(msg)
+	w.Write([]byte(msg))
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -151,6 +152,65 @@ func TestServer_redirect(t *testing.T) {
 				}
 			}
 
+		})
+	}
+}
+
+func TestServer_createRedirectJSON(t *testing.T) {
+	var configTest = config.Config{
+		RunAddr:   "127.0.0.1:8080",
+		ShortAddr: "http://127.0.0.1:8080",
+	}
+	var storageTest = storage.New()
+	var serviceTest = services.NewService(storageTest)
+	var location = "https://example.com"
+	var validKey, _ = serviceTest.CreateRedirect(location)
+	tests := []struct {
+		name        string
+		method      string
+		contentType string
+		code        int
+		data        string
+		result      string
+	}{
+		{
+			name:        "positive test1",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			code:        201,
+			data:        fmt.Sprintf("{\"url\": \"%s\"}", location),
+			result:      fmt.Sprintf("{\"result\":\"%s/%s\"}", configTest.ShortAddr, validKey),
+		},
+		{
+			name:        "negative test2",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			code:        400,
+			data:        "{\"param\": 123}",
+			result:      "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer(serviceTest, configTest)
+			request := httptest.NewRequest(tt.method, "/", bytes.NewBufferString(tt.data))
+			request.Header.Set("Content-Type", tt.contentType)
+			w := httptest.NewRecorder()
+			h := http.HandlerFunc(s.createRedirectJSON)
+
+			h.ServeHTTP(w, request)
+			res := w.Result()
+			if res.StatusCode != tt.code {
+				t.Errorf("Expected status code %d, got %d", tt.code, w.Code)
+			}
+			defer res.Body.Close()
+			if tt.code == 201 {
+				payloadBytes, _ := io.ReadAll(res.Body)
+				payload := string(payloadBytes)
+				if payload != tt.result {
+					t.Errorf("Expected result %s, got %s", tt.result, payload)
+				}
+			}
 		})
 	}
 }
