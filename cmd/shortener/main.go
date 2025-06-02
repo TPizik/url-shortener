@@ -15,7 +15,15 @@ import (
 
 func main() {
 	configVar := config.ParseConfig()
-	storageVar := storage.New()
+	persistentStorage, err := storage.NewFileStorage(configVar.FileStoragePath)
+	if err != nil {
+		panic(err)
+	}
+	defer persistentStorage.Close()
+	storageVar, err := storage.New(persistentStorage)
+	if err != nil {
+		panic(err)
+	}
 	serviceVar := services.NewService(storageVar)
 	serverVar := server.NewServer(serviceVar, configVar)
 	go serverVar.ListenAndServe()
