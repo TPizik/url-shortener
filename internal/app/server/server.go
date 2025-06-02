@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
 	"github.com/TPizik/url-shortener/internal/app/services"
@@ -15,9 +16,10 @@ import (
 )
 
 type Server struct {
-	service services.Service
-	srv     *http.Server
-	config  config.Config
+	service     services.Service
+	srv         *http.Server
+	config      config.Config
+	pingTimeout time.Duration
 }
 
 var Sugar zap.SugaredLogger
@@ -30,7 +32,7 @@ func NewServer(service services.Service, config config.Config) Server {
 	defer logger.Sync()
 
 	Sugar = *logger.Sugar()
-	newServer := Server{service: service, srv: nil, config: config}
+	newServer := Server{service: service, srv: nil, config: config, pingTimeout: 1 * time.Second}
 
 	r := chi.NewRouter()
 	r.Use(withLogging)
@@ -39,6 +41,7 @@ func NewServer(service services.Service, config config.Config) Server {
 	r.Post("/", newServer.createRedirect)
 	r.Post("/api/shorten", newServer.createRedirectJSON)
 	r.Get("/{keyID}", newServer.redirect)
+	r.Get("/ping", newServer.pingStorage)
 
 	srv := http.Server{
 		Addr:    config.RunAddr,
@@ -145,6 +148,19 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(response))
+}
+
+func (s *Server) pingStorage(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(s.pingTimeout))
+	defer cancel()
+	err := s.service.Ping(ctx)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("content-type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func (s *Server) error(w http.ResponseWriter, code int, msg string) {

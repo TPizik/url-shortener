@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"
 
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
+	"github.com/jmoiron/sqlx"
 )
 
 type PersistentStorageExpected interface {
@@ -17,9 +19,10 @@ type Storage struct {
 	sync.RWMutex
 	links   map[string]string
 	storage PersistentStorageExpected
+	db      *sqlx.DB
 }
 
-func New(persistent PersistentStorageExpected) (*Storage, error) {
+func New(persistent PersistentStorageExpected, db *sqlx.DB) (*Storage, error) {
 	data, err := persistent.Load()
 	if err != nil {
 		return nil, err
@@ -27,7 +30,12 @@ func New(persistent PersistentStorageExpected) (*Storage, error) {
 	return &Storage{
 		links:   data,
 		storage: persistent,
+		db:      db,
 	}, nil
+}
+
+func (c *Storage) Ping(ctx context.Context) error {
+	return c.db.PingContext(ctx)
 }
 
 func (c *Storage) Add(url string) (string, error) {
