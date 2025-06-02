@@ -13,6 +13,8 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
 	"github.com/go-chi/chi/v5"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestServer_createRedirect(t *testing.T) {
@@ -21,8 +23,9 @@ func TestServer_createRedirect(t *testing.T) {
 		ShortAddr:       "http://127.0.0.1:8080",
 		FileStoragePath: "storage.txt",
 	}
+	db, _ := sqlx.Open("sqlite3", ":memory:")
 	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	storageTest, _ := storage.New(persistentStorage)
+	storageTest, _ := storage.New(persistentStorage, db)
 	var serviceTest = services.NewService(storageTest)
 	tests := []struct {
 		name        string
@@ -101,7 +104,8 @@ func TestServer_redirect(t *testing.T) {
 		FileStoragePath: "storage.txt",
 	}
 	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	storageTest, _ := storage.New(persistentStorage)
+	db, _ := sqlx.Open("sqlite3", ":memory:")
+	storageTest, _ := storage.New(persistentStorage, db)
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
 	var validKey, _ = serviceTest.CreateRedirect(location)
@@ -167,7 +171,8 @@ func TestServer_createRedirectJSON(t *testing.T) {
 		FileStoragePath: "storage.txt",
 	}
 	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	storageTest, _ := storage.New(persistentStorage)
+	db, _ := sqlx.Open("sqlite3", ":memory:")
+	storageTest, _ := storage.New(persistentStorage, db)
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
 	var validKey, _ = serviceTest.CreateRedirect(location)
@@ -217,6 +222,52 @@ func TestServer_createRedirectJSON(t *testing.T) {
 					t.Errorf("Expected result %s, got %s", tt.result, payload)
 				}
 			}
+		})
+	}
+}
+
+func TestServer_pingStorage(t *testing.T) {
+	var configTest = config.Config{
+		RunAddr:         "127.0.0.1:8080",
+		ShortAddr:       "http://127.0.0.1:8080",
+		FileStoragePath: "storage.txt",
+	}
+	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
+	db, err := sqlx.Open("sqlite3", "test.db")
+	if err != nil {
+		t.Errorf("Problem with database")
+		return
+	}
+	storageTest, _ := storage.New(persistentStorage, db)
+	var serviceTest = services.NewService(storageTest)
+	client := http.Client{}
+
+	tests := []struct {
+		name string
+		code int
+		url  string
+	}{
+		{
+			name: "positive test1",
+			code: 200,
+			url:  "/ping",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer(serviceTest, configTest)
+
+			r := chi.NewRouter()
+			r.Get("/ping", s.pingStorage)
+			ts := httptest.NewServer(r)
+			defer ts.Close()
+			url := fmt.Sprintf("%s%s", ts.URL, tt.url)
+			fmt.Println("Url - ", url)
+			res, _ := client.Get(url)
+			if res.StatusCode != tt.code {
+				t.Errorf("Expected status code %d, got %d", tt.code, res.StatusCode)
+			}
+			defer res.Body.Close()
 		})
 	}
 }
