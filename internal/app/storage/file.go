@@ -2,18 +2,22 @@ package storage
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
+	"sync"
 )
 
 const maxCapacity = 1024
 
 type FileStorage struct {
+	sync.RWMutex
+	inmemory *InmemoryStorage
 	file     *os.File
 	filename string
 }
 
-type Row struct {
+type RowFile struct {
 	Key   string
 	Value string
 }
@@ -23,18 +27,31 @@ func NewFileStorage(filename string) (*FileStorage, error) {
 	if err != nil {
 		return nil, err
 	}
+	inmemory := NewInmemoryStorage()
 
-	return &FileStorage{file: file, filename: filename}, nil
+	return &FileStorage{file: file, filename: filename, inmemory: inmemory}, nil
 }
 
 func (s *FileStorage) Close() error {
 	return s.file.Close()
 }
 
-func (s *FileStorage) Load() (map[string]string, error) {
+func (s *FileStorage) Ping(ctx context.Context) error {
+	s.RLock()
+	defer s.RUnlock()
+	_, err := os.OpenFile(s.filename, os.O_RDONLY|os.O_CREATE, 0777)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *FileStorage) Load() error {
+	s.RLock()
+	defer s.RUnlock()
 	file, err := os.OpenFile(s.filename, os.O_RDONLY|os.O_CREATE, 0777)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, maxCapacity)
@@ -42,39 +59,58 @@ func (s *FileStorage) Load() (map[string]string, error) {
 	data := make(map[string]string)
 	for scanner.Scan() {
 		rawRow := scanner.Bytes()
-		var row Row
+		var row RowFile
 		err := json.Unmarshal(rawRow, &row)
 		if err == nil {
 			data[row.Key] = row.Value
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := file.Close(); err != nil {
-		return nil, err
+		return err
 	}
-	return data, nil
+	if err := s.inmemory.Append(data); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *FileStorage) Add(key string, val string) error {
-	row := Row{Key: key, Value: val}
+func (s *FileStorage) Add(ctx context.Context, url string) (string, error) {
+	s.Lock()
+	defer s.Unlock()
+	key, err := s.inmemory.Add(ctx, url)
+	if err != nil {
+		return "", err
+	}
+	row := RowFile{Key: key, Value: url}
 	data, err := json.Marshal(row)
 	if err != nil {
-		return err
+		return "", err
 	}
 	data = append(data, '\n')
 	_, err = s.file.Write(data)
 
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	err = s.file.Sync()
 
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	return key, nil
+}
+
+func (s *FileStorage) Get(ctx context.Context, key string) (string, error) {
+	s.RLock()
+	defer s.RUnlock()
+	url, err := s.inmemory.Get(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return url, nil
 }

@@ -1,0 +1,14 @@
+services:
+  database:
+    image: postgres
+    environment:
+      POSTGRES_DB: db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "user", "-d", "db"]
+      interval: 1s
+      timeout: 1s
+      retries: 60
+    ports:
+      - 5432:5432

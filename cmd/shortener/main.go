@@ -11,19 +11,16 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/server"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
+	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
 func main() {
 	configVar := config.ParseConfig()
-	persistentStorage, err := storage.NewFileStorage(configVar.FileStoragePath)
+	storageVar, err := storage.NewStorage(&configVar)
 	if err != nil {
 		panic(err)
 	}
-	defer persistentStorage.Close()
-	storageVar, err := storage.New(persistentStorage)
-	if err != nil {
-		panic(err)
-	}
+	defer storageVar.Close()
 	serviceVar := services.NewService(storageVar)
 	serverVar := server.NewServer(serviceVar, configVar)
 	go serverVar.ListenAndServe()
