@@ -4,44 +4,82 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"sync"
 
+	"github.com/TPizik/url-shortener/internal/app/config"
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
 	"github.com/jmoiron/sqlx"
 )
 
-type PersistentStorageExpected interface {
-	Load() (map[string]string, error)
-	Add(key string, val string) error
+type StorageExpected interface {
+	Get(ctx context.Context, key string) (string, error)
+	Add(ctx context.Context, key string) (string, error)
+	Ping(ctx context.Context) error
+	Close() error
 }
 
 type Storage struct {
-	sync.RWMutex
-	links   map[string]string
-	storage PersistentStorageExpected
-	db      *sqlx.DB
+	storage StorageExpected
 }
 
-func New(persistent PersistentStorageExpected, db *sqlx.DB) (*Storage, error) {
-	data, err := persistent.Load()
-	if err != nil {
-		return nil, err
+func NewStorage(config *config.Config) (*Storage, error) {
+	switch {
+	case config.DBDSN != "":
+		db, err := sqlx.Open("pgx", config.DBDSN)
+		if err != nil {
+			return nil, err
+		}
+		storage, err := NewDatabaseStorage(db)
+		if err != nil {
+			return nil, err
+		}
+		err = storage.Migrate()
+		if err != nil {
+			return nil, err
+		}
+		return &Storage{storage: storage}, nil
+	case config.FileStoragePath != "":
+		storage, err := NewFileStorage(config.FileStoragePath)
+		if err != nil {
+			return nil, err
+		}
+		err = storage.Load()
+		if err != nil {
+			return nil, err
+		}
+		return &Storage{storage: storage}, nil
+	default:
+		storage := NewInmemoryStorage()
+		return &Storage{storage: storage}, nil
 	}
-	return &Storage{
-		links:   data,
-		storage: persistent,
-		db:      db,
-	}, nil
 }
 
 func (c *Storage) Ping(ctx context.Context) error {
-	return c.db.PingContext(ctx)
+	return c.storage.Ping(ctx)
 }
 
-func (c *Storage) Add(url string) (string, error) {
-	c.Lock()
-	defer c.Unlock()
+func (c *Storage) Close() error {
+	return c.storage.Close()
+}
 
+func (c *Storage) Add(ctx context.Context, url string) (string, error) {
+	key, err := c.storage.Add(ctx, url)
+	if err != nil {
+		return "", err
+	}
+
+	return key, nil
+}
+
+func (c *Storage) Get(ctx context.Context, key string) (string, error) {
+	url, err := c.storage.Get(ctx, key)
+	if err != nil {
+		return "", err
+	}
+
+	return url, nil
+}
+
+func GetURLHash(url string) (string, error) {
 	h := sha256.New()
 	_, err := h.Write([]byte(url))
 	if err != nil {
@@ -50,20 +88,5 @@ func (c *Storage) Add(url string) (string, error) {
 
 	sha256Sum := h.Sum(nil)
 	key := hex.EncodeToString(sha256Sum[:5])
-	c.links[key] = url
-	c.storage.Add(key, url)
-
 	return key, nil
-}
-
-func (c *Storage) Get(key string) (string, error) {
-	c.RLock()
-	defer c.RUnlock()
-
-	url, ok := c.links[key]
-	if !ok {
-		return "", appErrors.ErrKey
-	}
-
-	return url, nil
 }

@@ -92,7 +92,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, err := s.service.CreateRedirect(url)
+	key, err := s.service.CreateRedirect(context.Background(), url)
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return
@@ -106,7 +106,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("keyID")
 	Sugar.Infoln("Call redirect for", key)
-	url, err := s.service.GetURLByKey(key)
+	url, err := s.service.GetURLByKey(context.Background(), key)
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return
@@ -135,7 +135,7 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Sugar.Infoln("Create redirect for", redirect.URL)
-	key, err := s.service.CreateRedirect(redirect.URL)
+	key, err := s.service.CreateRedirect(context.Background(), redirect.URL)
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return

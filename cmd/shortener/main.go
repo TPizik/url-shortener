@@ -12,25 +12,15 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
 	_ "github.com/jackc/pgx/v4/stdlib"
-	"github.com/jmoiron/sqlx"
 )
 
 func main() {
 	configVar := config.ParseConfig()
-	persistentStorage, err := storage.NewFileStorage(configVar.FileStoragePath)
+	storageVar, err := storage.NewStorage(&configVar)
 	if err != nil {
 		panic(err)
 	}
-	defer persistentStorage.Close()
-	db, err := sqlx.Open("pgx", configVar.DBDSN)
-	if err != nil {
-		panic(err)
-	}
-	defer db.Close()
-	storageVar, err := storage.New(persistentStorage, db)
-	if err != nil {
-		panic(err)
-	}
+	defer storageVar.Close()
 	serviceVar := services.NewService(storageVar)
 	serverVar := server.NewServer(serviceVar, configVar)
 	go serverVar.ListenAndServe()

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,9 +24,9 @@ func TestServer_createRedirect(t *testing.T) {
 		ShortAddr:       "http://127.0.0.1:8080",
 		FileStoragePath: "storage.txt",
 	}
-	db, _ := sqlx.Open("sqlite3", ":memory:")
-	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	storageTest, _ := storage.New(persistentStorage, db)
+	// db, _ := sqlx.Open("sqlite3", ":memory:")
+	// persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
+	storageTest, _ := storage.NewStorage(&configTest)
 	var serviceTest = services.NewService(storageTest)
 	tests := []struct {
 		name        string
@@ -103,12 +104,12 @@ func TestServer_redirect(t *testing.T) {
 		ShortAddr:       "http://127.0.0.1:8080",
 		FileStoragePath: "storage.txt",
 	}
-	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	db, _ := sqlx.Open("sqlite3", ":memory:")
-	storageTest, _ := storage.New(persistentStorage, db)
+	// persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
+	// db, _ := sqlx.Open("sqlite3", ":memory:")
+	storageTest, _ := storage.NewStorage(&configTest)
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
-	var validKey, _ = serviceTest.CreateRedirect(location)
+	var validKey, _ = serviceTest.CreateRedirect(context.Background(), location)
 	client := http.Client{}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -170,12 +171,10 @@ func TestServer_createRedirectJSON(t *testing.T) {
 		ShortAddr:       "http://127.0.0.1:8080",
 		FileStoragePath: "storage.txt",
 	}
-	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	db, _ := sqlx.Open("sqlite3", ":memory:")
-	storageTest, _ := storage.New(persistentStorage, db)
+	storageTest, _ := storage.NewStorage(&configTest)
 	var serviceTest = services.NewService(storageTest)
 	var location = "https://example.com"
-	var validKey, _ = serviceTest.CreateRedirect(location)
+	var validKey, _ = serviceTest.CreateRedirect(context.Background(), location)
 	tests := []struct {
 		name        string
 		method      string
@@ -228,18 +227,13 @@ func TestServer_createRedirectJSON(t *testing.T) {
 
 func TestServer_pingStorage(t *testing.T) {
 	var configTest = config.Config{
-		RunAddr:         "127.0.0.1:8080",
-		ShortAddr:       "http://127.0.0.1:8080",
-		FileStoragePath: "storage.txt",
+		RunAddr:   "127.0.0.1:8080",
+		ShortAddr: "http://127.0.0.1:8080",
+		DBDSN:     "sqlite::memory:",
 	}
-	persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	db, err := sqlx.Open("sqlite3", "test.db")
-	if err != nil {
-		t.Errorf("Problem with database")
-		return
-	}
-	storageTest, _ := storage.New(persistentStorage, db)
-	var serviceTest = services.NewService(storageTest)
+	db, _ := sqlx.Open("sqlite3", ":memory:")
+	dbStorage, _ := storage.NewDatabaseStorage(db)
+	var serviceTest = services.NewService(dbStorage)
 	client := http.Client{}
 
 	tests := []struct {

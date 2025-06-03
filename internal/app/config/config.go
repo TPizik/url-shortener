@@ -17,8 +17,8 @@ func ParseConfig() Config {
 
 	flag.StringVar(&flagRunAddr, "a", "127.0.0.1:8080", "address and port to run server")
 	flag.StringVar(&flagShortAddr, "b", "http://127.0.0.1:8080", "base address of the resulting shorthand url")
-	flag.StringVar(&flagStoragePath, "f", "storage.txt", "base path to storage file")
-	flag.StringVar(&flagDBDSN, "d", "postgres://user:pass@localhost:5432/db", "base path to database")
+	flag.StringVar(&flagStoragePath, "f", "", "base path to storage file")
+	flag.StringVar(&flagDBDSN, "d", "", "base path to database")
 	flag.Parse()
 
 	if envRunAddr := os.Getenv("SERVER_ADDRESS"); envRunAddr != "" {
