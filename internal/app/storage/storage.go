@@ -7,12 +7,15 @@ import (
 
 	"github.com/TPizik/url-shortener/internal/app/config"
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
+	"github.com/TPizik/url-shortener/internal/app/models"
+	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
 type StorageExpected interface {
 	Get(ctx context.Context, key string) (string, error)
 	Add(ctx context.Context, key string) (string, error)
+	AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error)
 	Ping(ctx context.Context) error
 	Close() error
 }
@@ -28,7 +31,7 @@ func NewStorage(config *config.Config) (*Storage, error) {
 		if err != nil {
 			return nil, err
 		}
-		storage, err := NewDatabaseStorage(db)
+		storage, err := NewDatabaseStorage(db, config)
 		if err != nil {
 			return nil, err
 		}
@@ -38,7 +41,7 @@ func NewStorage(config *config.Config) (*Storage, error) {
 		}
 		return &Storage{storage: storage}, nil
 	case config.FileStoragePath != "":
-		storage, err := NewFileStorage(config.FileStoragePath)
+		storage, err := NewFileStorage(config.FileStoragePath, config)
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +51,7 @@ func NewStorage(config *config.Config) (*Storage, error) {
 		}
 		return &Storage{storage: storage}, nil
 	default:
-		storage := NewInmemoryStorage()
+		storage := NewInmemoryStorage(config)
 		return &Storage{storage: storage}, nil
 	}
 }
@@ -79,6 +82,15 @@ func (c *Storage) Get(ctx context.Context, key string) (string, error) {
 	return url, nil
 }
 
+func (c *Storage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
+	url, err := c.storage.AddByBatch(ctx, requestURLs)
+	if err != nil {
+		return nil, err
+	}
+
+	return url, nil
+}
+
 func GetURLHash(url string) (string, error) {
 	h := sha256.New()
 	_, err := h.Write([]byte(url))
@@ -88,5 +100,6 @@ func GetURLHash(url string) (string, error) {
 
 	sha256Sum := h.Sum(nil)
 	key := hex.EncodeToString(sha256Sum[:5])
+
 	return key, nil
 }

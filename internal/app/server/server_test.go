@@ -232,7 +232,7 @@ func TestServer_pingStorage(t *testing.T) {
 		DBDSN:     "sqlite::memory:",
 	}
 	db, _ := sqlx.Open("sqlite3", ":memory:")
-	dbStorage, _ := storage.NewDatabaseStorage(db)
+	dbStorage, _ := storage.NewDatabaseStorage(db, &configTest)
 	var serviceTest = services.NewService(dbStorage)
 	client := http.Client{}
 

@@ -11,7 +11,6 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/server"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
-	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
 func main() {

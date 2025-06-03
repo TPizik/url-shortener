@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
+	"github.com/TPizik/url-shortener/internal/app/models"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -40,6 +41,7 @@ func NewServer(service services.Service, config config.Config) Server {
 	r.Use(gzipHandle)
 	r.Post("/", newServer.createRedirect)
 	r.Post("/api/shorten", newServer.createRedirectJSON)
+	r.Post("/api/shorten/batch", newServer.createRedirectByBatch)
 	r.Get("/{keyID}", newServer.redirect)
 	r.Get("/ping", newServer.pingStorage)
 
@@ -117,7 +119,7 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 	headerContentType := r.Header.Get("Content-Type")
 
-	var redirect Redirect
+	var redirect models.Redirect
 	switch headerContentType {
 	case "application/json":
 		dataBytes, err := io.ReadAll(r.Body)
@@ -140,13 +142,50 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return
 	}
-	result := ResultString{
+	result := models.ResultString{
 		Result: fmt.Sprintf("%s/%s", s.config.ShortAddr, key),
 	}
 
 	response, _ := json.Marshal(result)
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(response))
+}
+
+func (s *Server) createRedirectByBatch(w http.ResponseWriter, r *http.Request) {
+	headerContentType := r.Header.Get("Content-Type")
+	if headerContentType != "application/json" {
+		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
+		return
+	}
+	dataBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	requestURLs := make([]models.URLRowOriginal, 0)
+	err = json.Unmarshal(dataBytes, &requestURLs)
+	if err != nil {
+		s.error(w, http.StatusBadRequest, "invalid parse body")
+		return
+	}
+
+	responseURLs, err := s.service.CreateRedirectByBatch(context.Background(), requestURLs)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response, err := json.Marshal(responseURLs)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	status := http.StatusCreated
+	if len(responseURLs) == 0 {
+		status = http.StatusNoContent
+	}
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(status)
 	w.Write([]byte(response))
 }
 

@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
+
+	"github.com/TPizik/url-shortener/internal/app/config"
+	"github.com/TPizik/url-shortener/internal/app/models"
 )
 
 const maxCapacity = 1024
@@ -15,6 +19,7 @@ type FileStorage struct {
 	inmemory *InmemoryStorage
 	file     *os.File
 	filename string
+	config   *config.Config
 }
 
 type RowFile struct {
@@ -22,34 +27,34 @@ type RowFile struct {
 	Value string
 }
 
-func NewFileStorage(filename string) (*FileStorage, error) {
+func NewFileStorage(filename string, config *config.Config) (*FileStorage, error) {
 	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0777)
 	if err != nil {
 		return nil, err
 	}
-	inmemory := NewInmemoryStorage()
+	inmemory := NewInmemoryStorage(config)
 
-	return &FileStorage{file: file, filename: filename, inmemory: inmemory}, nil
+	return &FileStorage{file: file, filename: filename, inmemory: inmemory, config: config}, nil
 }
 
-func (s *FileStorage) Close() error {
-	return s.file.Close()
+func (c *FileStorage) Close() error {
+	return c.file.Close()
 }
 
-func (s *FileStorage) Ping(ctx context.Context) error {
-	s.RLock()
-	defer s.RUnlock()
-	_, err := os.OpenFile(s.filename, os.O_RDONLY|os.O_CREATE, 0777)
+func (c *FileStorage) Ping(ctx context.Context) error {
+	c.RLock()
+	defer c.RUnlock()
+	_, err := os.OpenFile(c.filename, os.O_RDONLY|os.O_CREATE, 0777)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *FileStorage) Load() error {
-	s.RLock()
-	defer s.RUnlock()
-	file, err := os.OpenFile(s.filename, os.O_RDONLY|os.O_CREATE, 0777)
+func (c *FileStorage) Load() error {
+	c.RLock()
+	defer c.RUnlock()
+	file, err := os.OpenFile(c.filename, os.O_RDONLY|os.O_CREATE, 0777)
 	if err != nil {
 		return err
 	}
@@ -71,16 +76,16 @@ func (s *FileStorage) Load() error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := s.inmemory.Append(data); err != nil {
+	if err := c.inmemory.Append(data); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *FileStorage) Add(ctx context.Context, url string) (string, error) {
-	s.Lock()
-	defer s.Unlock()
-	key, err := s.inmemory.Add(ctx, url)
+func (c *FileStorage) Add(ctx context.Context, url string) (string, error) {
+	c.Lock()
+	defer c.Unlock()
+	key, err := c.inmemory.Add(ctx, url)
 	if err != nil {
 		return "", err
 	}
@@ -90,13 +95,13 @@ func (s *FileStorage) Add(ctx context.Context, url string) (string, error) {
 		return "", err
 	}
 	data = append(data, '\n')
-	_, err = s.file.Write(data)
+	_, err = c.file.Write(data)
 
 	if err != nil {
 		return "", err
 	}
 
-	err = s.file.Sync()
+	err = c.file.Sync()
 
 	if err != nil {
 		return "", err
@@ -105,12 +110,28 @@ func (s *FileStorage) Add(ctx context.Context, url string) (string, error) {
 	return key, nil
 }
 
-func (s *FileStorage) Get(ctx context.Context, key string) (string, error) {
-	s.RLock()
-	defer s.RUnlock()
-	url, err := s.inmemory.Get(ctx, key)
+func (c *FileStorage) Get(ctx context.Context, key string) (string, error) {
+	c.RLock()
+	defer c.RUnlock()
+	url, err := c.inmemory.Get(ctx, key)
 	if err != nil {
 		return "", err
 	}
 	return url, nil
+}
+
+func (c *FileStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
+	shortURLs := make([]models.URLRowShort, 0)
+	for _, url := range requestURLs {
+		key, err := c.Add(ctx, url.OriginalURL)
+		if err != nil {
+			return nil, err
+		}
+		shortURL := models.URLRowShort{
+			CorrelationID: url.CorrelationID,
+			ShortURL:      fmt.Sprintf("%s/%s", c.config.ShortAddr, key),
+		}
+		shortURLs = append(shortURLs, shortURL)
+	}
+	return shortURLs, nil
 }
