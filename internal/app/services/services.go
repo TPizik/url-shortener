@@ -1,8 +1,16 @@
 package services
 
+import (
+	"context"
+
+	"github.com/TPizik/url-shortener/internal/app/models"
+)
+
 type IStorage interface {
-	Get(key string) (string, error)
-	Add(url string) (string, error)
+	Get(ctx context.Context, key string) (string, error)
+	Add(ctx context.Context, url string) (string, error)
+	AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error)
+	Ping(ctx context.Context) error
 }
 
 type Service struct {
@@ -15,10 +23,18 @@ func NewService(storage IStorage) Service {
 	}
 }
 
-func (s *Service) CreateRedirect(key string) (string, error) {
-	return s.storage.Add(key)
+func (s *Service) Ping(ctx context.Context) error {
+	return s.storage.Ping(ctx)
 }
 
-func (s *Service) GetURLByKey(key string) (string, error) {
-	return s.storage.Get(key)
+func (s *Service) CreateRedirect(ctx context.Context, key string) (string, error) {
+	return s.storage.Add(ctx, key)
+}
+
+func (s *Service) GetURLByKey(ctx context.Context, key string) (string, error) {
+	return s.storage.Get(ctx, key)
+}
+
+func (s *Service) CreateRedirectByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
+	return s.storage.AddByBatch(ctx, requestURLs)
 }
