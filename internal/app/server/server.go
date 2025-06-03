@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
+	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
 	"github.com/TPizik/url-shortener/internal/app/models"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/go-chi/chi/v5"
@@ -95,6 +96,13 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key, err := s.service.CreateRedirect(context.Background(), url)
+	if err == appErrors.ErrConflict {
+		Sugar.Infoln("Add url", url)
+		resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(resultURL))
+		return
+	}
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
+	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
 	"github.com/TPizik/url-shortener/internal/app/models"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgerrcode"
@@ -88,7 +89,7 @@ func (c *DatabaseStorage) Add(ctx context.Context, url string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return key, nil
+		return key, appErrors.ErrConflict
 	}
 	return key, nil
 }

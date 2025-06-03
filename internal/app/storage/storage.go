@@ -66,6 +66,9 @@ func (c *Storage) Close() error {
 
 func (c *Storage) Add(ctx context.Context, url string) (string, error) {
 	key, err := c.storage.Add(ctx, url)
+	if err != nil && err == appErrors.ErrConflict {
+		return key, err
+	}
 	if err != nil {
 		return "", err
 	}
