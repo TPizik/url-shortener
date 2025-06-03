@@ -8,6 +8,8 @@ import (
 
 	"github.com/TPizik/url-shortener/internal/app/config"
 	"github.com/TPizik/url-shortener/internal/app/models"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgerrcode"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -21,7 +23,8 @@ const schemaPostgres = `
 CREATE TABLE IF NOT EXISTS link (
     id SERIAL,
     key text NOT NULL,
-    value text NOT NULL
+    value text NOT NULL UNIQUE,
+		constraint cnst_link_value unique (value)
 )`
 
 type RowDatabase struct {
@@ -77,8 +80,15 @@ func (c *DatabaseStorage) Add(ctx context.Context, url string) (string, error) {
 		return "", err
 	}
 	var id string
-	if err := c.db.GetContext(ctx, &id, query, key, url); err != nil {
-		return "", err
+	var pgErr *pgconn.PgError
+	err = c.db.GetContext(ctx, &id, query, key, url)
+
+	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+		key, err = c.GetURLKey(ctx, url)
+		if err != nil {
+			return "", err
+		}
+		return key, nil
 	}
 	return key, nil
 }
@@ -107,4 +117,12 @@ func (c *DatabaseStorage) AddByBatch(ctx context.Context, requestURLs []models.U
 		shortURLs = append(shortURLs, shortURL)
 	}
 	return shortURLs, nil
+}
+
+func (c *DatabaseStorage) GetURLKey(ctx context.Context, originURL string) (string, error) {
+	var row RowDatabase
+	if err := c.db.GetContext(ctx, &row, "SELECT * FROM link where value=$1", originURL); err != nil {
+		return "", err
+	}
+	return row.Key, nil
 }
