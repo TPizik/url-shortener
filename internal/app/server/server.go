@@ -146,6 +146,16 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	Sugar.Infoln("Create redirect for", redirect.URL)
 	key, err := s.service.CreateRedirect(context.Background(), redirect.URL)
+	if err == appErrors.ErrConflict {
+		result := models.ResultString{
+			Result: fmt.Sprintf("%s/%s", s.config.ShortAddr, key),
+		}
+		response, _ := json.Marshal(result)
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(response))
+		return
+	}
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return
