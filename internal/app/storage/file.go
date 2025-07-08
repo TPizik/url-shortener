@@ -23,8 +23,9 @@ type FileStorage struct {
 }
 
 type RowFile struct {
-	Key   string
-	Value string
+	Key    string
+	Value  string
+	UserID string
 }
 
 func NewFileStorage(filename string, config *config.Config) (*FileStorage, error) {
@@ -39,6 +40,18 @@ func NewFileStorage(filename string, config *config.Config) (*FileStorage, error
 
 func (c *FileStorage) Close() error {
 	return c.file.Close()
+}
+
+func (c *FileStorage) Drop() error {
+	err := os.Remove(c.filename)
+	if err != nil {
+		return err
+	}
+	err = c.inmemory.Drop()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *FileStorage) Ping(ctx context.Context) error {
@@ -61,14 +74,16 @@ func (c *FileStorage) Load() error {
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, maxCapacity)
 	scanner.Buffer(buf, maxCapacity)
-	data := make(map[string]string)
+	data := make(map[string][]map[string]string)
 	for scanner.Scan() {
 		rawRow := scanner.Bytes()
 		var row RowFile
 		err := json.Unmarshal(rawRow, &row)
-		if err == nil {
-			data[row.Key] = row.Value
+		if err != nil {
+			return err
 		}
+		appendData := map[string]string{row.Key: row.Value}
+		data[row.UserID] = append(data[row.UserID], appendData)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -82,14 +97,14 @@ func (c *FileStorage) Load() error {
 	return nil
 }
 
-func (c *FileStorage) Add(ctx context.Context, url string) (string, error) {
+func (c *FileStorage) Add(ctx context.Context, url string, userID string) (string, error) {
 	c.Lock()
 	defer c.Unlock()
-	key, err := c.inmemory.Add(ctx, url)
+	key, err := c.inmemory.Add(ctx, url, userID)
 	if err != nil {
 		return "", err
 	}
-	row := RowFile{Key: key, Value: url}
+	row := RowFile{Key: key, Value: url, UserID: userID}
 	data, err := json.Marshal(row)
 	if err != nil {
 		return "", err
@@ -120,10 +135,10 @@ func (c *FileStorage) Get(ctx context.Context, key string) (string, error) {
 	return url, nil
 }
 
-func (c *FileStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
+func (c *FileStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal, userID string) ([]models.URLRowShort, error) {
 	shortURLs := make([]models.URLRowShort, 0)
 	for _, url := range requestURLs {
-		key, err := c.Add(ctx, url.OriginalURL)
+		key, err := c.Add(ctx, url.OriginalURL, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -134,4 +149,8 @@ func (c *FileStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRo
 		shortURLs = append(shortURLs, shortURL)
 	}
 	return shortURLs, nil
+}
+
+func (c *FileStorage) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
+	return c.inmemory.GetAllUserURLs(ctx, userID)
 }

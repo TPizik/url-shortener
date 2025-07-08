@@ -17,21 +17,24 @@ import (
 const schemaSqlite3 = `
 CREATE TABLE IF NOT EXISTS link (
     id INTEGER PRIMARY KEY,
+	user_id text NOT NULL,
     key text NOT NULL,
     value text NOT NULL
 )`
 const schemaPostgres = `
 CREATE TABLE IF NOT EXISTS link (
     id SERIAL,
+	user_id text NOT NULL,
     key text NOT NULL,
     value text NOT NULL UNIQUE,
 		constraint cnst_link_value unique (value)
 )`
 
 type RowDatabase struct {
-	ID    string `db:"id"`
-	Key   string `db:"key"`
-	Value string `db:"value"`
+	ID     string `db:"id"`
+	UserID string `db:"user_id"`
+	Key    string `db:"key"`
+	Value  string `db:"value"`
 }
 
 type DatabaseStorage struct {
@@ -67,14 +70,23 @@ func (c *DatabaseStorage) Close() error {
 	return nil
 }
 
+func (c *DatabaseStorage) Drop() error {
+	query := "DROP TABLE link"
+	_, err := c.db.Exec(query)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *DatabaseStorage) Ping(ctx context.Context) error {
 	return c.db.PingContext(ctx)
 }
 
-func (c *DatabaseStorage) Add(ctx context.Context, url string) (string, error) {
+func (c *DatabaseStorage) Add(ctx context.Context, url string, userID string) (string, error) {
 	c.Lock()
 	defer c.Unlock()
-	query := "INSERT INTO link(key, value) VALUES($1, $2) returning id"
+	query := "INSERT INTO link(user_id, key, value) VALUES($1, $2, $3) returning id"
 
 	key, err := GetURLHash(url)
 	if err != nil {
@@ -82,7 +94,7 @@ func (c *DatabaseStorage) Add(ctx context.Context, url string) (string, error) {
 	}
 	var id string
 	var pgErr *pgconn.PgError
-	err = c.db.GetContext(ctx, &id, query, key, url)
+	err = c.db.GetContext(ctx, &id, query, userID, key, url)
 
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
 		key, err = c.GetURLKey(ctx, url)
@@ -98,16 +110,16 @@ func (c *DatabaseStorage) Get(ctx context.Context, key string) (string, error) {
 	c.RLock()
 	defer c.RUnlock()
 	var row RowDatabase
-	if err := c.db.GetContext(ctx, &row, "SELECT * FROM link where key=$1", key); err != nil {
+	if err := c.db.GetContext(ctx, &row, "SELECT value FROM link where key=$1", key); err != nil {
 		return "", err
 	}
 	return row.Value, nil
 }
 
-func (c *DatabaseStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
+func (c *DatabaseStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal, userID string) ([]models.URLRowShort, error) {
 	shortURLs := make([]models.URLRowShort, 0)
 	for _, url := range requestURLs {
-		key, err := c.Add(ctx, url.OriginalURL)
+		key, err := c.Add(ctx, url.OriginalURL, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -122,8 +134,24 @@ func (c *DatabaseStorage) AddByBatch(ctx context.Context, requestURLs []models.U
 
 func (c *DatabaseStorage) GetURLKey(ctx context.Context, originURL string) (string, error) {
 	var row RowDatabase
-	if err := c.db.GetContext(ctx, &row, "SELECT * FROM link where value=$1", originURL); err != nil {
+	if err := c.db.GetContext(ctx, &row, "SELECT key FROM link where value=$1", originURL); err != nil {
 		return "", err
 	}
 	return row.Key, nil
+}
+
+func (c *DatabaseStorage) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
+	rows := make([]RowDatabase, 0)
+	err := c.db.SelectContext(ctx, &rows, "SELECT id, user_id, key, value FROM link WHERE user_id=$1 order by id", userID)
+	if err != nil {
+		return nil, err
+	}
+
+	data := make(map[string]string)
+	for i := range rows {
+		row := rows[i]
+		data[fmt.Sprint(row.Key)] = row.Value
+	}
+
+	return data, nil
 }

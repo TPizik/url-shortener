@@ -14,10 +14,12 @@ import (
 
 type StorageExpected interface {
 	Get(ctx context.Context, key string) (string, error)
-	Add(ctx context.Context, key string) (string, error)
-	AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error)
+	Add(ctx context.Context, key string, userID string) (string, error)
+	AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal, userID string) ([]models.URLRowShort, error)
+	GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error)
 	Ping(ctx context.Context) error
 	Close() error
+	Drop() error
 }
 
 type Storage struct {
@@ -64,8 +66,12 @@ func (c *Storage) Close() error {
 	return c.storage.Close()
 }
 
-func (c *Storage) Add(ctx context.Context, url string) (string, error) {
-	key, err := c.storage.Add(ctx, url)
+func (c *Storage) Drop() error {
+	return c.storage.Drop()
+}
+
+func (c *Storage) Add(ctx context.Context, url string, userID string) (string, error) {
+	key, err := c.storage.Add(ctx, url, userID)
 	if err != nil && err == appErrors.ErrConflict {
 		return key, err
 	}
@@ -85,13 +91,22 @@ func (c *Storage) Get(ctx context.Context, key string) (string, error) {
 	return url, nil
 }
 
-func (c *Storage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
-	url, err := c.storage.AddByBatch(ctx, requestURLs)
+func (c *Storage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal, userID string) ([]models.URLRowShort, error) {
+	url, err := c.storage.AddByBatch(ctx, requestURLs, userID)
 	if err != nil {
 		return nil, err
 	}
 
 	return url, nil
+}
+
+func (c *Storage) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
+	urls, err := c.storage.GetAllUserURLs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return urls, nil
 }
 
 func GetURLHash(url string) (string, error) {

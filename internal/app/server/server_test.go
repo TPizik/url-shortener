@@ -2,32 +2,75 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
 	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/TPizik/url-shortener/internal/app/storage"
+	"github.com/bytedance/sonic"
 	"github.com/go-chi/chi/v5"
-	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/jackc/pgx/v4/stdlib"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestServer_createRedirect(t *testing.T) {
-	var configTest = config.Config{
+type TestServer struct {
+	*httptest.Server
+	service     services.Service
+	config      config.Config
+	pingTimeout time.Duration
+}
+
+func NewTestServer(t *testing.T) TestServer {
+	config := config.Config{
 		RunAddr:         "127.0.0.1:8080",
 		ShortAddr:       "http://127.0.0.1:8080",
-		FileStoragePath: "storage.txt",
+		FileStoragePath: "",
+		// DBDSN:           "postgres://user:pass@localhost:5433/db-test",
+		DBDSN: "",
 	}
-	// db, _ := sqlx.Open("sqlite3", ":memory:")
-	// persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	storageTest, _ := storage.NewStorage(&configTest)
-	var serviceTest = services.NewService(storageTest)
+	storageTest, err := storage.NewStorage(&config)
+	assert.Nil(t, err)
+	serviceTest := services.NewService(storageTest)
+	assert.Nil(t, err)
+	s := NewServer(serviceTest, config)
+
+	r := chi.NewRouter()
+	r.Use(ungzipHandle)
+	r.Use(gzipHandle)
+	r.Use(setCookieHandler)
+	r.Post("/", s.createRedirect)
+	r.Post("/api/shorten/batch", s.createRedirectByBatch)
+	r.Post("/api/shorten", s.createRedirectJSON)
+	r.Get("/{keyID}", s.redirect)
+	r.Get("/api/user/urls", s.getAllUserURLs)
+	ts := httptest.NewServer(r)
+
+	srv := TestServer{service: serviceTest, Server: ts, config: config, pingTimeout: 1 * time.Second}
+
+	return srv
+}
+
+func (s *TestServer) Close() {
+	s.service.Drop()
+	s.service.Close()
+	s.Server.Close()
+}
+
+func TestServer_createRedirect(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+	client := http.Client{}
+	reqURL := fmt.Sprintf("%s/", ts.URL)
+
 	tests := []struct {
 		name        string
 		method      string
@@ -62,9 +105,9 @@ func TestServer_createRedirect(t *testing.T) {
 		},
 		{
 			name:        "negative invalid method",
-			method:      http.MethodGet,
+			method:      http.MethodPatch,
 			contentType: "application/x-www-form-urlencoded",
-			code:        400,
+			code:        405,
 			urlKey:      "url",
 			urlVal:      "http://example.com/...",
 		},
@@ -79,86 +122,88 @@ func TestServer_createRedirect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(serviceTest, configTest)
 			data := url.Values{}
 			data.Set(tt.urlKey, tt.urlVal)
 
-			request := httptest.NewRequest(tt.method, "/", bytes.NewBufferString(data.Encode()))
-			request.Header.Set("Content-Type", tt.contentType)
-			w := httptest.NewRecorder()
-			h := http.HandlerFunc(s.createRedirect)
+			request, err := http.NewRequest(tt.method, reqURL, bytes.NewBufferString(data.Encode()))
+			assert.Nil(t, err)
 
-			h.ServeHTTP(w, request)
-			res := w.Result()
-			if res.StatusCode != tt.code {
-				t.Errorf("Expected status code %d, got %d", tt.code, w.Code)
-			}
+			request.Header.Set("Content-Type", tt.contentType)
+			res, err := client.Do(request)
+
+			assert.Nil(t, err)
+			assert.Equal(t, res.StatusCode, tt.code, "statuses should be equal")
+
 			defer res.Body.Close()
 		})
 	}
 }
 
 func TestServer_redirect(t *testing.T) {
-	var configTest = config.Config{
-		RunAddr:         "127.0.0.1:8080",
-		ShortAddr:       "http://127.0.0.1:8080",
-		FileStoragePath: "storage.txt",
+	ts := NewTestServer(t)
+	defer ts.Close()
+	location := "http://example-test.com/..."
+	jar, err := cookiejar.New(nil)
+	assert.Nil(t, err)
+	client := http.Client{
+		Jar: jar,
 	}
-	// persistentStorage, _ := storage.NewFileStorage(configTest.FileStoragePath)
-	// db, _ := sqlx.Open("sqlite3", ":memory:")
-	storageTest, _ := storage.NewStorage(&configTest)
-	var serviceTest = services.NewService(storageTest)
-	var location = "https://example.com"
-	var validKey, _ = serviceTest.CreateRedirect(context.Background(), location)
-	client := http.Client{}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
+	data := url.Values{}
+	data.Set("url", location)
+	request, err := http.NewRequest(http.MethodPost, ts.URL, bytes.NewBufferString(data.Encode()))
+	assert.Nil(t, err)
+
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res, err := client.Do(request)
+	assert.Nil(t, err)
+
+	dataBytes, err := io.ReadAll(res.Body)
+	assert.Nil(t, err)
+	sepResData := strings.Split(string(dataBytes), "/")
+	validKey := sepResData[len(sepResData)-1]
+
+	defer res.Body.Close()
+	res, err = client.Do(request)
+	assert.Nil(t, err)
+	defer res.Body.Close()
 	tests := []struct {
 		name     string
 		method   string
-		code     int
 		url      string
+		code     int
 		location string
 	}{
 		{
 			name:     "positive test1",
 			method:   http.MethodGet,
-			code:     307,
 			url:      fmt.Sprintf("/%s", validKey),
+			code:     307,
 			location: location,
 		},
 		{
 			name:     "negative test2",
 			method:   http.MethodGet,
-			code:     400,
 			url:      "/invalid",
+			code:     400,
 			location: "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(serviceTest, configTest)
-
-			r := chi.NewRouter()
-			r.Get("/{keyID}", s.redirect)
-			ts := httptest.NewServer(r)
-			defer ts.Close()
 			url := fmt.Sprintf("%s%s", ts.URL, tt.url)
-			fmt.Println("Url - ", url)
 			res, err := client.Get(url)
-			if err != nil {
-				t.Errorf("Problem with server")
-			}
+
+			assert.Nil(t, err)
 			defer res.Body.Close()
-			if res.StatusCode != tt.code {
-				t.Errorf("Expected status code %d, got %d", tt.code, res.StatusCode)
-			}
+
+			assert.Equal(t, res.StatusCode, tt.code, "statuses should be equal")
+
 			if tt.code == 307 {
 				loc := res.Header.Get("location")
-				if loc != tt.location {
-					t.Errorf("Expected location %s, got %s", tt.location, loc)
-				}
+				assert.Equal(t, loc, tt.location, "statuses should be equal")
 			}
 
 		})
@@ -166,102 +211,131 @@ func TestServer_redirect(t *testing.T) {
 }
 
 func TestServer_createRedirectJSON(t *testing.T) {
-	var configTest = config.Config{
-		RunAddr:         "127.0.0.1:8080",
-		ShortAddr:       "http://127.0.0.1:8080",
-		FileStoragePath: "storage.txt",
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	client := http.Client{}
+	url := fmt.Sprintf("%s/api/shorten", ts.URL)
+	key, err := storage.GetURLHash(url)
+	validResponse := fmt.Sprintf("%s/%s", ts.URL, key)
+	assert.Nil(t, err)
+	type request struct {
+		URL string `json:"url"`
 	}
-	storageTest, _ := storage.NewStorage(&configTest)
-	var serviceTest = services.NewService(storageTest)
-	var location = "https://example.com"
-	var validKey, _ = serviceTest.CreateRedirect(context.Background(), location)
+
+	type response struct {
+		Result string `json:"result"`
+	}
+
 	tests := []struct {
 		name        string
 		method      string
 		contentType string
+		data        request
 		code        int
-		data        string
-		result      string
+		result      response
 	}{
 		{
 			name:        "positive test1",
 			method:      http.MethodPost,
 			contentType: "application/json",
+			data:        request{URL: "http://example-test-json.com"},
 			code:        201,
-			data:        fmt.Sprintf("{\"url\": \"%s\"}", location),
-			result:      fmt.Sprintf("{\"result\":\"%s/%s\"}", configTest.ShortAddr, validKey),
-		},
-		{
-			name:        "negative test2",
-			method:      http.MethodPost,
-			contentType: "application/json",
-			code:        400,
-			data:        "{\"param\": 123}",
-			result:      "",
+			result:      response{Result: validResponse},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(serviceTest, configTest)
-			request := httptest.NewRequest(tt.method, "/", bytes.NewBufferString(tt.data))
-			request.Header.Set("Content-Type", tt.contentType)
-			w := httptest.NewRecorder()
-			h := http.HandlerFunc(s.createRedirectJSON)
+			data, err := sonic.Marshal(tt.data)
+			assert.Nil(t, err)
 
-			h.ServeHTTP(w, request)
-			res := w.Result()
-			if res.StatusCode != tt.code {
-				t.Errorf("Expected status code %d, got %d", tt.code, w.Code)
-			}
+			req, _ := http.NewRequest(tt.method, url, bytes.NewBuffer(data))
+			req.Header.Set("Content-Type", tt.contentType)
+			res, err := client.Do(req)
+			assert.Nil(t, err)
+
+			assert.Equal(t, res.StatusCode, tt.code, "statuses should be equal")
+
 			defer res.Body.Close()
 			if tt.code == 201 {
-				payloadBytes, _ := io.ReadAll(res.Body)
-				payload := string(payloadBytes)
-				if payload != tt.result {
-					t.Errorf("Expected result %s, got %s", tt.result, payload)
-				}
+				bodyBytes, err := io.ReadAll(res.Body)
+				assert.Nil(t, err)
+				body := response{}
+				assert.Nil(t, sonic.Unmarshal(bodyBytes, &body))
 			}
 		})
 	}
 }
 
-func TestServer_pingStorage(t *testing.T) {
-	var configTest = config.Config{
-		RunAddr:   "127.0.0.1:8080",
-		ShortAddr: "http://127.0.0.1:8080",
-		DBDSN:     "sqlite::memory:",
-	}
-	db, _ := sqlx.Open("sqlite3", ":memory:")
-	dbStorage, _ := storage.NewDatabaseStorage(db, &configTest)
-	var serviceTest = services.NewService(dbStorage)
-	client := http.Client{}
+func TestServer_GetAllUserURLs(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
 
-	tests := []struct {
-		name string
-		code int
-		url  string
-	}{
+	jar, _ := cookiejar.New(nil)
+
+	client := http.Client{Jar: jar}
+	assert := assert.New(t)
+
+	type row struct {
+		ShortURL    string `json:"short_url"`
+		OriginalURL string `json:"original_url"`
+	}
+	type response struct {
+		ShortURL string `json:"result"`
+	}
+	type request struct {
+		URL string `json:"url"`
+	}
+
+	expected := []row{
 		{
-			name: "positive test1",
-			code: 200,
-			url:  "/ping",
+			ShortURL:    "http://127.0.0.1:8080/6287ba30f5",
+			OriginalURL: "http://example.com/1",
+		},
+		{
+			ShortURL:    "http://127.0.0.1:8080/a135beced0",
+			OriginalURL: "http://example.com/2",
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(serviceTest, configTest)
+	// get empty list
+	resp, err := client.Get(fmt.Sprintf("%s/api/user/urls", ts.URL))
+	assert.Equal(http.StatusNoContent, resp.StatusCode, "invalid status")
+	assert.Nil(err)
 
-			r := chi.NewRouter()
-			r.Get("/ping", s.pingStorage)
-			ts := httptest.NewServer(r)
-			defer ts.Close()
-			url := fmt.Sprintf("%s%s", ts.URL, tt.url)
-			fmt.Println("Url - ", url)
-			res, _ := client.Get(url)
-			if res.StatusCode != tt.code {
-				t.Errorf("Expected status code %d, got %d", tt.code, res.StatusCode)
-			}
-			defer res.Body.Close()
-		})
+	bodyBytes, err := io.ReadAll(resp.Body)
+	assert.Nil(err)
+	defer resp.Body.Close()
+	body := make([]row, 0)
+	sonic.Unmarshal(bodyBytes, &body)
+	assert.Equal(body, make([]row, 0), "body should be empty")
+
+	for i := range expected {
+		contentType := "application/json"
+		url := fmt.Sprintf("%s/api/shorten", ts.URL)
+		data := request{URL: expected[i].OriginalURL}
+		dataByte, err := sonic.Marshal(data)
+		assert.Nil(err)
+		resp, err := client.Post(url, contentType, bytes.NewBuffer(dataByte))
+		assert.Nil(err)
+		assert.Equal(resp.StatusCode, 201, "statuses should be equal")
+		bodyBytes, err = io.ReadAll(resp.Body)
+		assert.Nil(err)
+		defer resp.Body.Close()
+		var body response
+		err = sonic.Unmarshal(bodyBytes, &body)
+		assert.Nil(err)
+		expected[i].ShortURL = body.ShortURL
 	}
+
+	// get list
+	resp, err = client.Get(fmt.Sprintf("%s/api/user/urls", ts.URL))
+	assert.Nil(err)
+	assert.Equal(http.StatusOK, resp.StatusCode, "invalid status")
+
+	bodyBytes, err = io.ReadAll(resp.Body)
+	assert.Nil(err)
+	defer resp.Body.Close()
+	body = make([]row, 0)
+	sonic.Unmarshal(bodyBytes, &body)
+	assert.Equal(body, expected, "body is wrong. Got %v, want %v", body, expected)
 }

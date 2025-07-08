@@ -12,12 +12,12 @@ import (
 
 type InmemoryStorage struct {
 	sync.RWMutex
-	links  map[string]string
+	links  map[string][]map[string]string
 	config *config.Config
 }
 
 func NewInmemoryStorage(config *config.Config) *InmemoryStorage {
-	links := make(map[string]string)
+	links := make(map[string][]map[string]string)
 	return &InmemoryStorage{
 		links:  links,
 		config: config,
@@ -32,14 +32,21 @@ func (c *InmemoryStorage) Close() error {
 	return nil
 }
 
-func (c *InmemoryStorage) Append(data map[string]string) error {
+func (c *InmemoryStorage) Drop() error {
+	for k := range c.links {
+		delete(c.links, k)
+	}
+	return nil
+}
+
+func (c *InmemoryStorage) Append(data map[string][]map[string]string) error {
 	c.Lock()
 	defer c.Unlock()
 	c.links = data
 	return nil
 }
 
-func (c *InmemoryStorage) Add(ctx context.Context, url string) (string, error) {
+func (c *InmemoryStorage) Add(ctx context.Context, url string, userID string) (string, error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -47,24 +54,32 @@ func (c *InmemoryStorage) Add(ctx context.Context, url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c.links[key] = url
+	urlData := map[string]string{key: url}
+	c.links[userID] = append(c.links[userID], urlData)
 
 	return key, nil
 }
 
 func (c *InmemoryStorage) Get(ctx context.Context, key string) (string, error) {
+	var resURL string
 	c.RLock()
 	defer c.RUnlock()
-
-	url, ok := c.links[key]
-	if !ok {
+	for _, userLinks := range c.links {
+		for _, userLink := range userLinks {
+			url, ok := userLink[key]
+			if !ok {
+				continue
+			}
+			resURL = url
+		}
+	}
+	if resURL == "" {
 		return "", appErrors.ErrKey
 	}
-
-	return url, nil
+	return resURL, nil
 }
 
-func (c *InmemoryStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal) ([]models.URLRowShort, error) {
+func (c *InmemoryStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal, userID string) ([]models.URLRowShort, error) {
 	c.Lock()
 	defer c.Unlock()
 	shortURLs := make([]models.URLRowShort, 0)
@@ -73,7 +88,8 @@ func (c *InmemoryStorage) AddByBatch(ctx context.Context, requestURLs []models.U
 		if err != nil {
 			return nil, err
 		}
-		c.links[key] = url.OriginalURL
+		data := map[string]string{key: url.OriginalURL}
+		c.links[userID] = append(c.links[userID], data)
 		shortURL := models.URLRowShort{
 			CorrelationID: url.CorrelationID,
 			ShortURL:      fmt.Sprintf("%s/%s", c.config.ShortAddr, key),
@@ -81,4 +97,14 @@ func (c *InmemoryStorage) AddByBatch(ctx context.Context, requestURLs []models.U
 		shortURLs = append(shortURLs, shortURL)
 	}
 	return shortURLs, nil
+}
+
+func (c *InmemoryStorage) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
+	var data = make(map[string]string)
+	for _, userURLs := range c.links[userID] {
+		for key, url := range userURLs {
+			data[key] = url
+		}
+	}
+	return data, nil
 }
