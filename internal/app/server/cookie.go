@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
+	"github.com/TPizik/url-shortener/internal/app/services"
 	"github.com/google/uuid"
 )
 
@@ -17,13 +18,14 @@ const (
 )
 
 func setCookieHandler(next http.Handler) http.Handler {
+	logger := services.InitLogger()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenCookie, err := r.Cookie(tokenHeaderName)
 		var token string
 		if err == http.ErrNoCookie {
 			token = ""
 		} else if err != nil {
-			Sugar.Errorln(appErrors.ErrReedCookie.Error())
+			logger.Errorln(appErrors.ErrReedCookie.Error())
 
 			cancel(w)
 		} else {
@@ -33,7 +35,7 @@ func setCookieHandler(next http.Handler) http.Handler {
 		if !validateToken(token) {
 			token, err = generateToken()
 			if err != nil {
-				Sugar.Errorln(appErrors.ErrGenToken.Error())
+				logger.Errorln(appErrors.ErrGenToken.Error())
 				cancel(w)
 			}
 			cookie := &http.Cookie{
@@ -42,7 +44,7 @@ func setCookieHandler(next http.Handler) http.Handler {
 				MaxAge: tokenHeaderAge,
 				Path:   "/",
 			}
-			Sugar.Infoln("Set token %s:%s", cookie.Name, cookie.Value)
+			logger.Infoln("Set token %s:%s", cookie.Name, cookie.Value)
 			http.SetCookie(w, cookie)
 			r.AddCookie(cookie)
 		}
@@ -78,15 +80,16 @@ func generateToken() (string, error) {
 }
 
 func getUserID(r *http.Request) (string, error) {
+	logger := services.InitLogger()
 	tokenCookie, err := r.Cookie(tokenHeaderName)
 	if err != nil {
-		Sugar.Errorln(err)
+		logger.Errorln(err)
 		return "", err
 	}
 	token := tokenCookie.Value
 	data, err := hex.DecodeString(token)
 	if err != nil {
-		Sugar.Errorln(err)
+		logger.Errorln(err)
 		return "", err
 	}
 	id := data[:16]

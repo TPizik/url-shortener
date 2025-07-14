@@ -22,3 +22,14 @@ type URLRow struct {
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
 }
+
+type ShortenedURL struct {
+	Key         string `json:"short_url"`
+	OriginalURL string `json:"original_url"`
+	IsDeleted   bool   `json:"is_deleted"`
+}
+
+type DeleteURLsTask struct {
+	UserID    string
+	ShortURLs []string
+}

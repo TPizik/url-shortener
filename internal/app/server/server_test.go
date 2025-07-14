@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,7 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/storage"
 	"github.com/bytedance/sonic"
 	"github.com/go-chi/chi/v5"
-	_ "github.com/jackc/pgx/v4/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -34,12 +35,12 @@ func NewTestServer(t *testing.T) TestServer {
 		RunAddr:         "127.0.0.1:8080",
 		ShortAddr:       "http://127.0.0.1:8080",
 		FileStoragePath: "",
-		// DBDSN:           "postgres://user:pass@localhost:5433/db-test",
-		DBDSN: "",
+		DBDSN:           "",
 	}
-	storageTest, err := storage.NewStorage(&config)
+	storageTest, err := storage.NewStorage(context.Background(), &config)
 	assert.Nil(t, err)
-	serviceTest := services.NewService(storageTest)
+	deleteURLQueue := services.NewDeleteURLQueue(storageTest, 2)
+	serviceTest := services.NewService(storageTest, deleteURLQueue)
 	assert.Nil(t, err)
 	s := NewServer(serviceTest, config)
 
@@ -52,6 +53,7 @@ func NewTestServer(t *testing.T) TestServer {
 	r.Post("/api/shorten", s.createRedirectJSON)
 	r.Get("/{keyID}", s.redirect)
 	r.Get("/api/user/urls", s.getAllUserURLs)
+	r.Delete("/api/user/urls", s.deleteURLs)
 	ts := httptest.NewServer(r)
 
 	srv := TestServer{service: serviceTest, Server: ts, config: config, pingTimeout: 1 * time.Second}
@@ -68,7 +70,8 @@ func (s *TestServer) Close() {
 func TestServer_createRedirect(t *testing.T) {
 	ts := NewTestServer(t)
 	defer ts.Close()
-	client := http.Client{}
+	jar, _ := cookiejar.New(nil)
+	client := http.Client{Jar: jar}
 	reqURL := fmt.Sprintf("%s/", ts.URL)
 
 	tests := []struct {
@@ -84,6 +87,14 @@ func TestServer_createRedirect(t *testing.T) {
 			method:      http.MethodPost,
 			contentType: "application/x-www-form-urlencoded",
 			code:        201,
+			urlKey:      "url",
+			urlVal:      "http://example.com/...",
+		},
+		{
+			name:        "positive test conflict",
+			method:      http.MethodPost,
+			contentType: "application/x-www-form-urlencoded",
+			code:        409,
 			urlKey:      "url",
 			urlVal:      "http://example.com/...",
 		},
@@ -132,7 +143,7 @@ func TestServer_createRedirect(t *testing.T) {
 			res, err := client.Do(request)
 
 			assert.Nil(t, err)
-			assert.Equal(t, res.StatusCode, tt.code, "statuses should be equal")
+			assert.Equal(t, tt.code, res.StatusCode, "statuses should be equal")
 
 			defer res.Body.Close()
 		})
@@ -338,4 +349,66 @@ func TestServer_GetAllUserURLs(t *testing.T) {
 	body = make([]row, 0)
 	sonic.Unmarshal(bodyBytes, &body)
 	assert.Equal(body, expected, "body is wrong. Got %v, want %v", body, expected)
+}
+
+func TestServer_DeleteUrls(t *testing.T) {
+	ts := NewTestServer(t)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	client := http.Client{Jar: jar}
+	creaateUrl := fmt.Sprintf("%s/api/shorten", ts.URL)
+	deleteUrl := fmt.Sprintf("%s/api/user/urls", ts.URL)
+
+	type createRequest struct {
+		URL string `json:"url"`
+	}
+	type createResponse struct {
+		Result string `json:"result"`
+	}
+
+	tests := []struct {
+		name        string
+		method      string
+		contentType string
+		code        int
+	}{
+		{
+			name:        "positive test1",
+			method:      http.MethodDelete,
+			contentType: "text/plain",
+			code:        202,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestContentType := "application/json"
+			data := createRequest{URL: "http://example.com"}
+			requestData, err := sonic.Marshal(data)
+			assert.Nil(t, err)
+
+			req, _ := http.NewRequest(http.MethodPost, creaateUrl, bytes.NewBuffer(requestData))
+			req.Header.Set("Content-Type", requestContentType)
+			res, err := client.Do(req)
+			assert.Nil(t, err)
+
+			assert.Equal(t, http.StatusCreated, res.StatusCode, "statuses should be equal")
+
+			defer res.Body.Close()
+			bodyBytes, err := io.ReadAll(res.Body)
+			assert.Nil(t, err)
+			body := createResponse{}
+			assert.Nil(t, sonic.Unmarshal(bodyBytes, &body))
+			key := []string{body.Result}
+			deleteRequestData, err := sonic.Marshal(key)
+			assert.Nil(t, err)
+			reqDelete, _ := http.NewRequest(http.MethodDelete, deleteUrl, bytes.NewBuffer(deleteRequestData))
+			reqDelete.Header.Set("Content-Type", requestContentType)
+			resDelete, err := client.Do(reqDelete)
+			assert.Nil(t, err)
+
+			assert.Equal(t, http.StatusAccepted, resDelete.StatusCode, "statuses should be equal")
+
+		})
+	}
 }

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/TPizik/url-shortener/internal/app/services"
 )
 
 type (
@@ -38,6 +40,7 @@ func (r *loggingResponseWriter) WriteHeader(statusCode int) {
 }
 
 func withLogging(h http.Handler) http.Handler {
+	logger := services.InitLogger()
 	logFn := func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -52,8 +55,7 @@ func withLogging(h http.Handler) http.Handler {
 		h.ServeHTTP(&lw, r)
 
 		duration := time.Since(start)
-
-		Sugar.Infoln(
+		logger.Infoln(
 			"uri", r.RequestURI,
 			"method", r.Method,
 			"status", responseData.status,

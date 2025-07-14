@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"time"
@@ -14,13 +13,17 @@ import (
 )
 
 func main() {
+	logger := services.InitLogger()
+	defer logger.Sync()
 	configVar := config.ParseConfig()
-	storageVar, err := storage.NewStorage(&configVar)
+	storageVar, err := storage.NewStorage(context.Background(), &configVar)
 	if err != nil {
 		panic(err)
 	}
+	deleteURLQueue := services.NewDeleteURLQueue(storageVar, 2)
+	go deleteURLQueue.Start(context.Background())
 	defer storageVar.Close()
-	serviceVar := services.NewService(storageVar)
+	serviceVar := services.NewService(storageVar, deleteURLQueue)
 	serverVar := server.NewServer(serviceVar, configVar)
 	go serverVar.ListenAndServe()
 
@@ -34,5 +37,5 @@ func main() {
 	if err := serverVar.Shutdown(ctx); err != nil {
 		panic("unexpected err on graceful shutdown")
 	}
-	fmt.Println("main: done. exiting")
+	logger.Infoln("main: done. exiting")
 }

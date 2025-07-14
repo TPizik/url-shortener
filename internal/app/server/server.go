@@ -23,19 +23,16 @@ type Server struct {
 	srv         *http.Server
 	config      config.Config
 	pingTimeout time.Duration
+	logger      *zap.SugaredLogger
 }
 
-var Sugar zap.SugaredLogger
-
 func NewServer(service services.Service, config config.Config) Server {
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		panic(err)
-	}
-	defer logger.Sync()
-
-	Sugar = *logger.Sugar()
-	newServer := Server{service: service, srv: nil, config: config, pingTimeout: 1 * time.Second}
+	newServer := Server{
+		service:     service,
+		srv:         nil,
+		config:      config,
+		pingTimeout: 1 * time.Second,
+		logger:      services.InitLogger()}
 
 	r := chi.NewRouter()
 	r.Use(withLogging)
@@ -48,6 +45,7 @@ func NewServer(service services.Service, config config.Config) Server {
 	r.Get("/{keyID}", newServer.redirect)
 	r.Get("/api/user/urls", newServer.getAllUserURLs)
 	r.Get("/ping", newServer.pingStorage)
+	r.Delete("/api/user/urls", newServer.deleteURLs)
 
 	srv := http.Server{
 		Addr:    config.RunAddr,
@@ -105,7 +103,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 
 	key, err := s.service.CreateRedirect(context.Background(), url, userID)
 	if err == appErrors.ErrConflict {
-		Sugar.Infoln("Add url", url)
+		s.logger.Infoln("Add url", url)
 		resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
 		w.WriteHeader(http.StatusConflict)
 		w.Write([]byte(resultURL))
@@ -115,7 +113,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusBadRequest, "invalid key")
 		return
 	}
-	Sugar.Infoln("Add url", url)
+	s.logger.Infoln("Add url", url)
 	resultURL := fmt.Sprintf("%s/%s", s.config.ShortAddr, key)
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(resultURL))
@@ -123,7 +121,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("keyID")
-	Sugar.Infoln("Call redirect for", key)
+	s.logger.Infoln("Call redirect for", key)
 	url, err := s.service.GetURLByKey(context.Background(), key)
 	if err != nil {
 		s.error(w, http.StatusBadRequest, "invalid key")
@@ -157,7 +155,7 @@ func (s *Server) createRedirectJSON(w http.ResponseWriter, r *http.Request) {
 		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
 		return
 	}
-	Sugar.Infoln("Create redirect for", redirect.URL)
+	s.logger.Infoln("Create redirect for", redirect.URL)
 	key, err := s.service.CreateRedirect(context.Background(), redirect.URL, userID)
 	if err == appErrors.ErrConflict {
 		result := models.ResultString{
@@ -279,6 +277,38 @@ func (s *Server) pingStorage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) error(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	w.Header().Set("content-type", "plain/text")
-	Sugar.Infoln(msg)
+	s.logger.Infoln(msg)
 	w.Write([]byte(msg))
+}
+
+func (s *Server) deleteURLs(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserID(r)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, "invalid token")
+		return
+	}
+	headerContentType := r.Header.Get("Content-Type")
+	if headerContentType != "application/json" {
+		s.error(w, http.StatusUnsupportedMediaType, "invalid ContentType")
+		return
+	}
+	dataBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	requestURLs := make([]string, 0)
+	err = sonic.Unmarshal(dataBytes, &requestURLs)
+	if err != nil {
+		s.error(w, http.StatusBadRequest, "invalid parse body")
+		return
+	}
+	err = s.service.DeleteURLs(context.Background(), requestURLs, userID)
+	if err != nil {
+		s.error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.Header().Set("content-type", "text/plain")
+	w.WriteHeader(http.StatusAccepted)
+
 }

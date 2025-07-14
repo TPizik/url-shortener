@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
@@ -12,12 +13,12 @@ import (
 
 type InmemoryStorage struct {
 	sync.RWMutex
-	links  map[string][]map[string]string
+	links  map[string][]models.ShortenedURL
 	config *config.Config
 }
 
 func NewInmemoryStorage(config *config.Config) *InmemoryStorage {
-	links := make(map[string][]map[string]string)
+	links := make(map[string][]models.ShortenedURL)
 	return &InmemoryStorage{
 		links:  links,
 		config: config,
@@ -33,13 +34,11 @@ func (c *InmemoryStorage) Close() error {
 }
 
 func (c *InmemoryStorage) Drop() error {
-	for k := range c.links {
-		delete(c.links, k)
-	}
+	c.links = make(map[string][]models.ShortenedURL)
 	return nil
 }
 
-func (c *InmemoryStorage) Append(data map[string][]map[string]string) error {
+func (c *InmemoryStorage) Append(data map[string][]models.ShortenedURL) error {
 	c.Lock()
 	defer c.Unlock()
 	c.links = data
@@ -54,8 +53,21 @@ func (c *InmemoryStorage) Add(ctx context.Context, url string, userID string) (s
 	if err != nil {
 		return "", err
 	}
-	urlData := map[string]string{key: url}
-	c.links[userID] = append(c.links[userID], urlData)
+	userData, ok := c.links[userID]
+	if ok {
+		for _, data := range userData {
+			if data.OriginalURL == url {
+				return data.Key, appErrors.ErrConflict
+			}
+		}
+	}
+
+	dataURL := models.ShortenedURL{
+		Key:         key,
+		OriginalURL: url,
+		IsDeleted:   false,
+	}
+	c.links[userID] = append(c.links[userID], dataURL)
 
 	return key, nil
 }
@@ -66,11 +78,13 @@ func (c *InmemoryStorage) Get(ctx context.Context, key string) (string, error) {
 	defer c.RUnlock()
 	for _, userLinks := range c.links {
 		for _, userLink := range userLinks {
-			url, ok := userLink[key]
-			if !ok {
+			if key != userLink.Key {
 				continue
 			}
-			resURL = url
+			if userLink.IsDeleted {
+				return "", appErrors.ErrURLIsDeleted
+			}
+			resURL = userLink.OriginalURL
 		}
 	}
 	if resURL == "" {
@@ -88,7 +102,11 @@ func (c *InmemoryStorage) AddByBatch(ctx context.Context, requestURLs []models.U
 		if err != nil {
 			return nil, err
 		}
-		data := map[string]string{key: url.OriginalURL}
+		data := models.ShortenedURL{
+			Key:         key,
+			OriginalURL: url.OriginalURL,
+			IsDeleted:   false,
+		}
 		c.links[userID] = append(c.links[userID], data)
 		shortURL := models.URLRowShort{
 			CorrelationID: url.CorrelationID,
@@ -102,9 +120,27 @@ func (c *InmemoryStorage) AddByBatch(ctx context.Context, requestURLs []models.U
 func (c *InmemoryStorage) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
 	var data = make(map[string]string)
 	for _, userURLs := range c.links[userID] {
-		for key, url := range userURLs {
-			data[key] = url
+		if userURLs.IsDeleted {
+			continue
 		}
+		data[userURLs.Key] = userURLs.OriginalURL
 	}
 	return data, nil
+}
+
+func (c *InmemoryStorage) DoDeleteURLTasks(ctx context.Context, tasks []models.DeleteURLsTask) error {
+	c.Lock()
+	defer c.Unlock()
+	for _, task := range tasks {
+		userURLs, ok := c.links[task.UserID]
+		if !ok {
+			return nil
+		}
+		for i, userURL := range userURLs {
+			if slices.Contains(task.ShortURLs, userURL.Key) {
+				c.links[task.UserID][i].IsDeleted = true
+			}
+		}
+	}
+	return nil
 }

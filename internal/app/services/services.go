@@ -16,13 +16,19 @@ type IStorage interface {
 	Drop() error
 }
 
-type Service struct {
-	storage IStorage
+type deleteURLQueue interface {
+	Push(task *models.DeleteURLsTask)
 }
 
-func NewService(storage IStorage) Service {
+type Service struct {
+	storage        IStorage
+	deleteURLQueue deleteURLQueue
+}
+
+func NewService(storage IStorage, deleteURLQueue deleteURLQueue) Service {
 	return Service{
-		storage: storage,
+		storage:        storage,
+		deleteURLQueue: deleteURLQueue,
 	}
 }
 
@@ -48,6 +54,14 @@ func (s *Service) CreateRedirectByBatch(ctx context.Context, requestURLs []model
 
 func (s *Service) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
 	return s.storage.GetAllUserURLs(ctx, userID)
+}
+
+func (s *Service) DeleteURLs(ctx context.Context, urls []string, userID string) error {
+	go s.deleteURLQueue.Push(&models.DeleteURLsTask{
+		ShortURLs: urls,
+		UserID:    userID,
+	})
+	return nil
 }
 
 func (s *Service) Close() error {

@@ -8,7 +8,8 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/config"
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
 	"github.com/TPizik/url-shortener/internal/app/models"
-	_ "github.com/jackc/pgx/v4/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -17,6 +18,7 @@ type StorageExpected interface {
 	Add(ctx context.Context, key string, userID string) (string, error)
 	AddByBatch(ctx context.Context, requestURLs []models.URLRowOriginal, userID string) ([]models.URLRowShort, error)
 	GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error)
+	DoDeleteURLTasks(ctx context.Context, tasks []models.DeleteURLsTask) error
 	Ping(ctx context.Context) error
 	Close() error
 	Drop() error
@@ -26,14 +28,18 @@ type Storage struct {
 	storage StorageExpected
 }
 
-func NewStorage(config *config.Config) (*Storage, error) {
+func NewStorage(ctx context.Context, config *config.Config) (*Storage, error) {
 	switch {
 	case config.DBDSN != "":
 		db, err := sqlx.Open("pgx", config.DBDSN)
 		if err != nil {
 			return nil, err
 		}
-		storage, err := NewDatabaseStorage(db, config)
+		dbpoll, err := pgxpool.New(ctx, config.DBDSN)
+		if err != nil {
+			return nil, err
+		}
+		storage, err := NewDatabaseStorage(db, dbpoll, config)
 		if err != nil {
 			return nil, err
 		}
@@ -120,4 +126,12 @@ func GetURLHash(url string) (string, error) {
 	key := hex.EncodeToString(sha256Sum[:5])
 
 	return key, nil
+}
+
+func (c *Storage) DoDeleteURLTasks(ctx context.Context, tasks []models.DeleteURLsTask) error {
+	err := c.storage.DoDeleteURLTasks(ctx, tasks)
+	if err != nil {
+		return err
+	}
+	return nil
 }

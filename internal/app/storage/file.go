@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/TPizik/url-shortener/internal/app/config"
@@ -23,9 +24,10 @@ type FileStorage struct {
 }
 
 type RowFile struct {
-	Key    string
-	Value  string
-	UserID string
+	Key       string
+	Value     string
+	UserID    string
+	IsDeleted bool
 }
 
 func NewFileStorage(filename string, config *config.Config) (*FileStorage, error) {
@@ -74,7 +76,7 @@ func (c *FileStorage) Load() error {
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, maxCapacity)
 	scanner.Buffer(buf, maxCapacity)
-	data := make(map[string][]map[string]string)
+	data := make(map[string][]models.ShortenedURL)
 	for scanner.Scan() {
 		rawRow := scanner.Bytes()
 		var row RowFile
@@ -82,7 +84,11 @@ func (c *FileStorage) Load() error {
 		if err != nil {
 			return err
 		}
-		appendData := map[string]string{row.Key: row.Value}
+		appendData := models.ShortenedURL{
+			Key:         row.Key,
+			OriginalURL: row.Value,
+			IsDeleted:   row.IsDeleted,
+		}
 		data[row.UserID] = append(data[row.UserID], appendData)
 	}
 	if err := scanner.Err(); err != nil {
@@ -104,7 +110,7 @@ func (c *FileStorage) Add(ctx context.Context, url string, userID string) (strin
 	if err != nil {
 		return "", err
 	}
-	row := RowFile{Key: key, Value: url, UserID: userID}
+	row := RowFile{Key: key, Value: url, UserID: userID, IsDeleted: false}
 	data, err := json.Marshal(row)
 	if err != nil {
 		return "", err
@@ -153,4 +159,29 @@ func (c *FileStorage) AddByBatch(ctx context.Context, requestURLs []models.URLRo
 
 func (c *FileStorage) GetAllUserURLs(ctx context.Context, userID string) (map[string]string, error) {
 	return c.inmemory.GetAllUserURLs(ctx, userID)
+}
+
+func (c *FileStorage) DoDeleteURLTasks(ctx context.Context, tasks []models.DeleteURLsTask) error {
+	c.Lock()
+	defer c.Unlock()
+	for _, task := range tasks {
+		userURLs, ok := c.inmemory.links[task.UserID]
+		if !ok {
+			return nil
+		}
+		for i, userURL := range userURLs {
+			if slices.Contains(task.ShortURLs, userURL.Key) {
+				c.inmemory.links[task.UserID][i].IsDeleted = true
+			}
+		}
+	}
+	b, err := json.Marshal(c.inmemory.links)
+	if err != nil {
+		return err
+	}
+	_, err = c.file.Write(b)
+	if err != nil {
+		return err
+	}
+	return nil
 }

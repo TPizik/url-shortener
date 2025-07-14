@@ -9,60 +9,48 @@ import (
 	"github.com/TPizik/url-shortener/internal/app/config"
 	appErrors "github.com/TPizik/url-shortener/internal/app/errors"
 	"github.com/TPizik/url-shortener/internal/app/models"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jmoiron/sqlx"
 )
 
-const schemaSqlite3 = `
-CREATE TABLE IF NOT EXISTS link (
-    id INTEGER PRIMARY KEY,
-	user_id text NOT NULL,
-    key text NOT NULL,
-    value text NOT NULL
-)`
 const schemaPostgres = `
 CREATE TABLE IF NOT EXISTS link (
     id SERIAL,
 	user_id text NOT NULL,
     key text NOT NULL,
+	is_deleted boolean NOT NULL,
     value text NOT NULL UNIQUE,
 		constraint cnst_link_value unique (value)
 )`
 
 type RowDatabase struct {
-	ID     string `db:"id"`
-	UserID string `db:"user_id"`
-	Key    string `db:"key"`
-	Value  string `db:"value"`
+	ID        string `db:"id"`
+	UserID    string `db:"user_id"`
+	Key       string `db:"key"`
+	Value     string `db:"value"`
+	IsDeleted bool   `db:"is_deleted"`
 }
 
 type DatabaseStorage struct {
 	sync.RWMutex
 	db     *sqlx.DB
+	dbpool *pgxpool.Pool
 	config *config.Config
 }
 
-func NewDatabaseStorage(db *sqlx.DB, config *config.Config) (*DatabaseStorage, error) {
-	return &DatabaseStorage{db: db, config: config}, nil
+func NewDatabaseStorage(db *sqlx.DB, dbpoll *pgxpool.Pool, config *config.Config) (*DatabaseStorage, error) {
+	return &DatabaseStorage{db: db, dbpool: dbpoll, config: config}, nil
 }
 
 func (c *DatabaseStorage) Migrate() error {
-	var schema string
-
-	switch c.db.DriverName() {
-	case "sqlite3":
-		schema = schemaSqlite3
-	case "pgx":
-		schema = schemaPostgres
-	default:
-		return errors.New("unsupported driver type")
-	}
-	_, err := c.db.Exec(schema)
+	_, err := c.db.Exec(schemaPostgres)
 	return err
 }
 
 func (c *DatabaseStorage) Close() error {
+	c.dbpool.Close()
 	err := c.db.Close()
 	if err != nil {
 		return err
@@ -86,7 +74,7 @@ func (c *DatabaseStorage) Ping(ctx context.Context) error {
 func (c *DatabaseStorage) Add(ctx context.Context, url string, userID string) (string, error) {
 	c.Lock()
 	defer c.Unlock()
-	query := "INSERT INTO link(user_id, key, value) VALUES($1, $2, $3) returning id"
+	query := "INSERT INTO link(user_id, key, value, is_deleted) VALUES($1, $2, $3, $4) returning id"
 
 	key, err := GetURLHash(url)
 	if err != nil {
@@ -94,9 +82,9 @@ func (c *DatabaseStorage) Add(ctx context.Context, url string, userID string) (s
 	}
 	var id string
 	var pgErr *pgconn.PgError
-	err = c.db.GetContext(ctx, &id, query, userID, key, url)
+	err = c.db.GetContext(ctx, &id, query, userID, key, url, false)
 
-	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+	if errors.As(err, &pgErr) && pgErr.Code == appErrors.PgUniqueIndexErrorCode {
 		key, err = c.GetURLKey(ctx, url)
 		if err != nil {
 			return "", err
@@ -154,4 +142,28 @@ func (c *DatabaseStorage) GetAllUserURLs(ctx context.Context, userID string) (ma
 	}
 
 	return data, nil
+}
+
+func (c *DatabaseStorage) DoDeleteURLTasks(ctx context.Context, tasks []models.DeleteURLsTask) error {
+	batch := &pgx.Batch{}
+
+	query := `
+		UPDATE link
+		SET is_deleted = TRUE
+		WHERE user_id = $1 AND key = ANY($2)
+	`
+
+	for _, task := range tasks {
+		batch.Queue(
+			query,
+			task.UserID,
+			task.ShortURLs,
+		)
+	}
+	batchResult := c.dbpool.SendBatch(ctx, batch)
+	err := batchResult.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }
