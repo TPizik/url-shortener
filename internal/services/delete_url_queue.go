@@ -5,27 +5,30 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TPizik/url-shortener/internal/app/models"
-	"go.uber.org/zap"
+	"github.com/TPizik/url-shortener/internal/domain"
 )
 
 type urlStorage interface {
-	DoDeleteURLTasks(ctx context.Context, tasks []models.DeleteURLsTask) error
+	DoDeleteURLTasks(ctx context.Context, tasks []domain.DeleteURLsTask) error
+}
+
+type logger interface {
+	Info(msg string)
 }
 
 type DeleteURLQueue struct {
-	ch         chan *models.DeleteURLsTask
+	ch         chan *domain.DeleteURLsTask
 	urlStorage urlStorage
-	tasks      []models.DeleteURLsTask
-	logger     *zap.SugaredLogger
+	logger     logger
+	tasks      []domain.DeleteURLsTask
 }
 
-func NewDeleteURLQueue(urlStorage urlStorage, maxWorker int) *DeleteURLQueue {
+func NewDeleteURLQueue(urlStorage urlStorage, logger logger, maxWorker int) *DeleteURLQueue {
 	return &DeleteURLQueue{
 		urlStorage: urlStorage,
-		ch:         make(chan *models.DeleteURLsTask, maxWorker),
-		tasks:      make([]models.DeleteURLsTask, 0, 500),
-		logger:     InitLogger(),
+		logger:     logger,
+		ch:         make(chan *domain.DeleteURLsTask, maxWorker),
+		tasks:      make([]domain.DeleteURLsTask, 0, 500),
 	}
 }
 
@@ -39,17 +42,17 @@ func (q *DeleteURLQueue) Start(ctx context.Context) {
 			q.tasks = append(q.tasks, *task)
 		case <-ctx.Done():
 			if err := q.doDeleteTasks(); err != nil {
-				q.logger.Errorln(err.Error())
+				q.logger.Info(err.Error())
 			}
 		case <-ticker.C:
 			if err := q.doDeleteTasks(); err != nil {
-				q.logger.Errorln(err.Error())
+				q.logger.Info(err.Error())
 			}
 		}
 	}
 }
 
-func (q *DeleteURLQueue) Push(task *models.DeleteURLsTask) {
+func (q *DeleteURLQueue) Push(task *domain.DeleteURLsTask) {
 	q.ch <- task
 }
 
@@ -62,7 +65,7 @@ func (q *DeleteURLQueue) doDeleteTasks() error {
 		return err
 	}
 
-	Sugar.Infoln(fmt.Sprintf("Successfully did %d delete url tasks", len(q.tasks)))
+	q.logger.Info(fmt.Sprintf("Successfully did %d delete url tasks", len(q.tasks)))
 	q.tasks = q.tasks[0:]
 	return nil
 }
