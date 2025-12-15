@@ -22,4 +22,5 @@ vendor/
 
 # IDEs directories
 .idea
+.env
 .vscode

@@ -1,0 +1,180 @@
+package storage
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+
+	"github.com/TPizik/url-shortener/internal/domain"
+)
+
+type FileStorage struct {
+	structure     map[string]domain.ShortenedURL
+	file          *os.File
+	savingChanges bool
+}
+
+func NewFileStorage(fileStoragePath string) (*FileStorage, error) {
+	storage := FileStorage{
+		structure:     make(map[string]domain.ShortenedURL),
+		savingChanges: false,
+	}
+
+	if fileStoragePath != "" {
+		if file, err := os.OpenFile(fileStoragePath, os.O_RDWR|os.O_CREATE, 0644); err == nil {
+			storage.file = file
+			storage.savingChanges = true
+		}
+	}
+
+	if storage.savingChanges {
+		storage.parseFromFile()
+	}
+
+	return &storage, nil
+}
+
+func (storage *FileStorage) GetByShortURL(ctx context.Context, shortURL string) (*domain.ShortenedURL, error) {
+	if url, ok := storage.structure[shortURL]; ok {
+		return &url, nil
+	}
+
+	return nil, domain.ErrURLNotFound
+}
+
+func (storage *FileStorage) GetURLsByUserID(ctx context.Context, userID string) ([]domain.ShortenedURL, error) {
+	urls := make([]domain.ShortenedURL, 0)
+
+	for _, value := range storage.structure {
+		if value.UserID == userID {
+			urls = append(urls, value)
+		}
+	}
+
+	return urls, nil
+}
+
+func (storage *FileStorage) FindByOriginalURL(ctx context.Context, originalURL string) (*domain.ShortenedURL, error) {
+	for _, value := range storage.structure {
+		if value.OriginalURL == originalURL {
+			return &value, nil
+		}
+	}
+
+	return nil, domain.ErrURLNotFound
+}
+
+func (storage *FileStorage) SaveURL(ctx context.Context, dto domain.SaveShortURLDto) (*domain.ShortenedURL, error) {
+	shortenedURL, err := storage.FindByOriginalURL(ctx, dto.OriginalURL)
+
+	if err == nil {
+		return shortenedURL, domain.ErrURLConflict
+	}
+
+	shortenedURL = &domain.ShortenedURL{
+		ID:          len(storage.structure) + 1,
+		ShortURL:    dto.ShortURL,
+		OriginalURL: dto.OriginalURL,
+	}
+	storage.structure[dto.ShortURL] = *shortenedURL
+
+	if storage.savingChanges {
+		storage.saveToFile()
+	}
+
+	return shortenedURL, nil
+}
+
+func (storage *FileStorage) SaveSeveralURL(ctx context.Context, dtos []domain.SaveShortURLDto) ([]domain.ShortenedURL, error) {
+	shortenedURLs := make([]domain.ShortenedURL, 0, len(dtos))
+
+	for _, dto := range dtos {
+		shortenedURL, err := storage.FindByOriginalURL(ctx, dto.OriginalURL)
+
+		if err != nil {
+			shortenedURL = &domain.ShortenedURL{
+				ID:          len(storage.structure) + 1,
+				ShortURL:    dto.ShortURL,
+				OriginalURL: dto.OriginalURL,
+			}
+
+			storage.structure[dto.ShortURL] = *shortenedURL
+		}
+
+		shortenedURLs = append(shortenedURLs, *shortenedURL)
+	}
+
+	if storage.savingChanges {
+		storage.saveToFile()
+	}
+
+	return shortenedURLs, nil
+}
+
+func (storage *FileStorage) DeleteByShortURLs(ctx context.Context, shortURLs []string, userID string) error {
+	for _, shortURL := range shortURLs {
+		shortenedURL := storage.structure[shortURL]
+
+		if shortenedURL.UserID != userID {
+			continue
+		}
+
+		shortenedURL.IsDeleted = true
+		storage.structure[shortURL] = shortenedURL
+	}
+
+	if storage.savingChanges {
+		storage.saveToFile()
+	}
+
+	return nil
+}
+
+func (storage *FileStorage) DoDeleteURLTasks(ctx context.Context, tasks []domain.DeleteURLsTask) error {
+	for _, task := range tasks {
+		for _, shortURL := range task.ShortURLs {
+			shortenedURL := storage.structure[shortURL]
+
+			if shortenedURL.UserID != task.UserID {
+				continue
+			}
+
+			shortenedURL.IsDeleted = true
+			storage.structure[shortURL] = shortenedURL
+		}
+	}
+
+	if storage.savingChanges {
+		storage.saveToFile()
+	}
+
+	return nil
+}
+
+func (storage *FileStorage) Ping(ctx context.Context) error {
+	return nil
+}
+
+func (storage *FileStorage) parseFromFile() error {
+	b, err := os.ReadFile(storage.file.Name())
+
+	if err != nil {
+		return err
+	}
+
+	if err := json.Unmarshal(b, &storage.structure); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (storage *FileStorage) saveToFile() error {
+	b, err := json.Marshal(&storage.structure)
+
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(storage.file.Name(), b, os.ModeAppend)
+}
