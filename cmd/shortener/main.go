@@ -24,12 +24,6 @@ import (
 	"github.com/TPizik/url-shortener/internal/storage"
 )
 
-var (
-	buildVersion string
-	buildDate    string
-	buildCommit  string
-)
-
 func main() {
 	err := godotenv.Load(".env")
 	if err != nil {
@@ -119,7 +113,7 @@ func main() {
 
 	workersStopCtx()
 
-	log.Println("graceful shutdown server successfully")
+	customLogger.Info("graceful shutdown server successfully")
 }
 
 func makeRouter(
@@ -147,6 +141,7 @@ func makeRouter(
 	mux.Get("/api/user/urls", shortenerHandler.GetMyURLs)
 	mux.Get("/ping", shortenerHandler.Ping)
 	mux.Get("/{id}", shortenerHandler.RedirectToURLByID)
+	mux.Mount("/debug", middleware.Profiler())
 
 	return mux
 }
